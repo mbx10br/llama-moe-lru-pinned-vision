@@ -1,0 +1,32 @@
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index 2456f7dc..ac6508e0 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -5320,7 +5320,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
+ static bool ggml_backend_cuda_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
+     ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) dev->context;
+     const bool integrated = ggml_cuda_info().devices[dev_ctx->device].integrated;
+-    return (ggml_backend_buft_is_cuda(buft) && buft->device == dev) || (integrated && ggml_backend_buft_is_cuda_host(buft));
++    return (ggml_backend_buft_is_cuda(buft) && buft->device == dev) || ggml_backend_buft_is_cuda_host(buft);
+ }
+ 
+ static int64_t get_op_batch_size(const ggml_tensor * op) {
+diff --git a/tools/mtmd/clip.cpp b/tools/mtmd/clip.cpp
+index 90de1957..92cd0b33 100644
+--- a/tools/mtmd/clip.cpp
++++ b/tools/mtmd/clip.cpp
+@@ -3558,6 +3558,14 @@ struct clip_model_loader {
+ 
+             // alloc memory and offload data
+             ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
++            if (std::getenv("MTMD_PINNED_HOST") != nullptr) {
++                ggml_backend_dev_t dev = ggml_backend_get_device(ctx_clip.backend);
++                ggml_backend_buffer_type_t host_buft = dev ? ggml_backend_dev_host_buffer_type(dev) : nullptr;
++                if (host_buft) {
++                    buft = host_buft;
++                    LOG_INF("%s: CLIP weights allocated in pinned host memory (CUDA_Host)\n", __func__);
++                }
++            }
+             ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
+             ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+             // read the weight from file
