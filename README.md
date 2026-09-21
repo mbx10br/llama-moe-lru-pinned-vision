@@ -16,10 +16,12 @@ This project combines and refines two key architectural ideas to break the memor
    * When `MTMD_PINNED_HOST=1` is set, the multimodal vision projector (`mmproj`, ~866 MB in BF16) is allocated in host pinned RAM instead of persistent VRAM.
    * CUDA kernels execute the vision forward pass directly from pinned RAM over PCIe via DMA under demand, completely freeing ~866 MB of persistent VRAM for LLM experts and KV cache.
 
-### 🙏 Credits & References
-* **[llama.cpp](https://github.com/ggml-org/llama.cpp)**: Georgi Gerganov and the GGML team for the extraordinary foundational runtime.
-* **MoE Expert Cache PR (#27861)**: Authors of the host-offloaded GPU-resident LRU cache implementation.
-* **FreeToken & ncpumoe**: Prior theoretical and empirical works demonstrating temporal locality and sparse expert activation patterns in modern MoE architectures.
+### 🙏 Credits & Acknowledgements
+* **[llama.cpp](https://github.com/ggml-org/llama.cpp)**: Georgi Gerganov and the GGML team for the extraordinary foundational runtime that powers local LLM inference across heterogeneous hardware.
+* **MoE Expert Cache PR (#27861)**: Authors of the host-offloaded GPU-resident LRU cache implementation (`exp/moe-lru-cache`), introducing dynamic slot caching and throttled asynchronous uploads.
+* **FreeToken & ncpumoe**: Prior theoretical and empirical works demonstrating temporal locality, expert stickiness, and sparse activation patterns in modern MoE architectures, paving the way for hierarchical CPU/GPU memory routing.
+* **Qwen Team (Alibaba Cloud)**: For developing the exceptional Qwen 3.8 Flash Next MoE architecture (512 total experts, 10 routed, 2 KV heads) which enables massive context windows with minimal KV memory footprint.
+* **ISTA-DASLab**: For the GSQ-RCO quantization methodology and the N-gram speculative lookup tables that make 122B inference viable on consumer workstations.
 
 ---
 
@@ -38,11 +40,13 @@ On a 16GB GPU (such as the RTX 5060 Ti with 15.6 GB usable VRAM):
 ## 📊 Benchmark & Real-World Validation
 
 ### Test Environment
-* **GPU**: NVIDIA GeForce RTX 5060 Ti 16GB (Blackwell Architecture, SM 12.0)
-* **CPU**: AMD Ryzen 5 on A520M DS3H V2
-* **Host RAM**: 64GB DDR4
-* **Storage**: NVMe SSD (Shard 2 N-gram table memory-mapped via `-lm mmap`)
-* **Model**: `Qwen3.8-Flash-Next-GSQ-RCO-GGUF` (Q2_0, 122B total parameters, 512 experts, 10 routed)
+* **CPU**: AMD Ryzen 7 5700G (8 cores / 16 threads, Zen 3, 3.8 GHz base / 4.6 GHz boost)
+* **Motherboard**: Gigabyte A520M DS3H V2 (AM4, PCIe 3.0 / PCIe 4.0 support)
+* **Host RAM**: 48 GB DDR4 (4 sticks in Dual-Channel configuration @ 3200 MHz, 2x16GB + 2x8GB)
+* **GPU**: NVIDIA GeForce RTX 5060 Ti 16GB (Blackwell Architecture, SM 12.0, 16,311 MiB VRAM)
+* **Storage**: Fast NVMe PCIe M.2 SSD (Shard 2 N-gram speculative table memory-mapped via `-lm mmap`)
+* **OS / Environment**: Linux x86_64, CUDA 13.1, NVIDIA Driver 590.48.01
+* **Model**: `Qwen3.8-Flash-Next-GSQ-RCO-GGUF` (Q2_0, 122B total parameters, 512 experts, 10 routed per token)
 * **Context**: 138,000 tokens (`-ctk q5_1 -ctv q5_1 -fa on`)
 
 ### Performance Results

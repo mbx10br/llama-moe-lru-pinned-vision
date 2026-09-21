@@ -15,7 +15,7 @@ flowchart TD
         DummySlot["Dummy Slot (slot n_slots: permanently zero)"]
     end
 
-    subgraph Host_RAM ["Host System RAM (64 GB DDR4)"]
+    subgraph Host_RAM ["Host System RAM (48 GB DDR4 @ 3200 MHz Dual-Channel, 4 sticks)"]
         AllExperts["512 Experts per layer (Authoritative Weights)"]
         MMPROJ["Vision Projector (mmproj BF16 - 866 MB)<br/><b>Allocated in CUDA_Host (Pinned)</b>"]
         CPUTable["Host Mapping Table (host_table)"]
