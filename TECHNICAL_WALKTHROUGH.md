@@ -227,3 +227,41 @@ $$\text{Final Output} = \text{Output}_{\text{GPU}} + \text{Output}_{\text{CPU}}$
    Since exactly one side computes the real value and the other produces 0:
    $$\text{Real Value} + 0 = \text{Real Value}$$
    The result is **exact to the bit with zero precision loss!**
+
+---
+
+## ⚡ 5. Direct Zero-Copy PCIe DMA (`cudaHostRegister`)
+
+### The Bottleneck in Standard Host Offloading
+In default Linux/CUDA setups, host-resident tensors are allocated via normal user-space memory (`malloc` or standard `mmap`). When `cudaMemcpyAsync` is called to transfer expert weights across the PCIe bus:
+1. The NVIDIA driver cannot directly perform Direct Memory Access (DMA) from pageable user memory.
+2. The operating system kernel must first copy the data into an internal pinned staging buffer (bounce buffer).
+3. The GPU then transfers data from the kernel staging buffer to VRAM.
+
+This double-copy introduces CPU kernel overhead and caps PCIe transfer speed, causing significant token latency spikes during cold start (when many experts are being uploaded simultaneously).
+
+### The Zero-Copy Solution in `llama-moecache.cpp`
+During cache initialization, we iterate over all host-resident expert tensor buffers (`ffn_up_exps`, `ffn_gate_exps`, `ffn_down_exps`) and register them directly with the CUDA driver:
+
+```cpp
+// src/llama-moecache.cpp
+void * base = ggml_backend_buffer_get_base(t->buffer);
+size_t sz   = ggml_backend_buffer_get_size(t->buffer);
+if (base && sz > 0) {
+    cudaHostRegister(base, sz, cudaHostRegisterPortable | cudaHostRegisterReadOnly);
+}
+```
+
+Combined with `ulimit -l unlimited` (to permit locking ~32 GB of physical RAM pages), this:
+* Locks the virtual pages into physical RAM.
+* Maps the physical addresses directly into the GPU's DMA engine.
+* Enables `cudaMemcpyAsync` to transfer expert slices at the full physical bandwidth of PCIe 3.0 (15.7 GB/s) with **zero CPU mediation**.
+
+### Empirical Optimization Findings (The 4 Samples)
+
+| Sample | Concept | Result | Architectural Takeaway |
+| :--- | :--- | :--- | :--- |
+| **1. Zero-Copy DMA Experts** | `cudaHostRegister` on 512 experts | **12.70 t/s cold / 15.16 t/s warm** (🚀 **+50.5% cold**) | **Kept.** Eliminating kernel staging copies drastically accelerates expert cache population. |
+| **2. Pinned `token_embd`** | Move embedding to `CUDA_Host` | **11.10 t/s** (🔻 -12.6%); 152 slots OOMs | **Discarded.** Embedding lookup occurs on *every* token in the critical path; PCIe round-trip latency outweighs VRAM savings. |
+| **3. GPU Miss Streaming** | GPU computes misses over PCIe | Slower than async upload | **Discarded.** DMA upload is so fast with Sample 1 (<1 ms) that async background upload beats PCIe bus contention. |
+| **4. Ultra-Context Scaling** | 110 slots @ 256k context | **9.60 t/s cold / 12.20 t/s warm** (4.6 GB KV cache) | **Kept as Profile 2.** Demonstrates that context can scale to 256,000 tokens in 16GB VRAM by trading 34 MoE slots. |

@@ -144,10 +144,32 @@ index 87ac0a70..50ca3c8d 100644
  
      // reset current_chunk
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 2456f7dc..ac6508e0 100644
+index 2456f7dc..85b64cdc 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -5320,7 +5320,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
+@@ -4639,20 +4639,15 @@ void ggml_backend_cuda_get_device_memory(int device, size_t * free, size_t * tot
+ }
+ 
+ bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size) {
+-    if (getenv("GGML_CUDA_REGISTER_HOST") == nullptr) {
+-        return false;
+-    }
+-
+ #if CUDART_VERSION >= 11010 || defined(GGML_USE_MUSA) || defined(GGML_USE_HIP)
+     cudaError_t err = cudaHostRegister(buffer, size, cudaHostRegisterPortable | cudaHostRegisterReadOnly);
+     if (err != cudaSuccess) {
+-        // clear the error
+         (void)cudaGetLastError();
+-
+         GGML_LOG_DEBUG("%s: failed to register %.2f MiB of pinned memory: %s\n", __func__,
+                            size / 1024.0 / 1024.0, cudaGetErrorString(err));
+         return false;
+     }
++    GGML_LOG_INFO("%s: registered %.2f MiB of pinned host memory (CUDA_Host)\n", __func__, size / 1024.0 / 1024.0);
+     return true;
+ #else
+     GGML_UNUSED(buffer);
+@@ -5320,7 +5315,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
  static bool ggml_backend_cuda_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
      ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) dev->context;
      const bool integrated = ggml_cuda_info().devices[dev_ctx->device].integrated;
@@ -357,12 +379,41 @@ index 8fca8e1b..717ddd7a 100644
      if (down_exps_s) {
          cb(experts, "ffn_moe_down_scaled", il);
      }
+diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
+index d9241022..081ab4e6 100644
+--- a/src/llama-model-loader.cpp
++++ b/src/llama-model-loader.cpp
+@@ -1214,9 +1214,22 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+             }
+         }
+ 
+-        // avoid using a host buffer when using mmap
++        bool allow_host_pinned = false;
++        if (tn.tensor == LLM_TENSOR_TOKEN_EMBD && getenv("LLAMA_PINNED_EMBD") != nullptr) {
++            auto * cuda_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
++            if (cuda_dev) {
++                auto host_buft = ggml_backend_dev_host_buffer_type(cuda_dev);
++                if (host_buft) {
++                    buft = host_buft;
++                    allow_host_pinned = true;
++                    LLAMA_LOG_INFO("%s: token_embd allocated in CUDA_Host (pinned host memory)\n", __func__);
++                }
++            }
++        }
++
++        // avoid using a host buffer when using mmap (unless explicitly allowed)
+         auto * buft_dev = ggml_backend_buft_get_device(buft);
+-        if (use_mmap && buft_dev && buft == ggml_backend_dev_host_buffer_type(buft_dev)) {
++        if (!allow_host_pinned && use_mmap && buft_dev && buft == ggml_backend_dev_host_buffer_type(buft_dev)) {
+             auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+             if (!cpu_dev) {
+                 throw std::runtime_error("no CPU backend found");
 diff --git a/src/llama-moecache.cpp b/src/llama-moecache.cpp
 new file mode 100644
-index 00000000..4e0732e8
+index 00000000..f90f8812
 --- /dev/null
 +++ b/src/llama-moecache.cpp
-@@ -0,0 +1,407 @@
+@@ -0,0 +1,436 @@
 +#include "llama-moecache.h"
 +
 +#include "llama-impl.h"
@@ -381,6 +432,7 @@ index 00000000..4e0732e8
 +#include <string>
 +#include <thread>
 +#include <vector>
++#include <set>
 +
 +namespace {
 +
@@ -649,6 +701,34 @@ index 00000000..4e0732e8
 +            vram += ggml_nbytes(ls.pub.up_c) + ggml_nbytes(ls.pub.gate_c) + ggml_nbytes(ls.pub.down_c);
 +            LLAMA_LOG_DEBUG("moe-cache: init layer %d '%s' %zu bytes/expert\n",
 +                    ls.pub.il, ls.pub.up_src->name, ls.pub.up_src->nb[2]);
++        }
++
++        // pin host-resident expert buffers in physical RAM for zero-copy PCIe DMA
++        for (auto & g : groups) {
++            ggml_backend_dev_t dev = ggml_backend_buft_get_device(g.first);
++            ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
++            auto reg_host_fn = reg ? (bool (*)(void *, size_t)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_register_host_buffer") : nullptr;
++            if (reg_host_fn) {
++                std::set<ggml_backend_buffer_t> pinned_bufs;
++                size_t total_pinned_bytes = 0;
++                for (const auto & c : g.second) {
++                    for (const ggml_tensor * t : {c.l->ffn_up_exps, c.l->ffn_gate_exps, c.l->ffn_down_exps}) {
++                        if (t && t->buffer && pinned_bufs.insert(t->buffer).second) {
++                            void * base = ggml_backend_buffer_get_base(t->buffer);
++                            size_t sz   = ggml_backend_buffer_get_size(t->buffer);
++                            if (base && sz > 0) {
++                                if (reg_host_fn(base, sz)) {
++                                    total_pinned_bytes += sz;
++                                }
++                            }
++                        }
++                    }
++                }
++                if (total_pinned_bytes > 0) {
++                    LLAMA_LOG_INFO("moe-cache: pinned %.1f MiB of host expert weights in RAM for direct DMA\n",
++                                   total_pinned_bytes / 1024.0 / 1024.0);
++                }
++            }
 +        }
 +
 +        mc->worker = std::thread([mc]() {
