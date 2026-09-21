@@ -4,6 +4,10 @@ Running **122B Parameter MoE Models** (e.g., Qwen 3.8 Flash Next 122B) with **13
 
 ---
 
+> 🚀 **More updates are on the way!** We are actively researching and testing further memory optimizations, including direct zero-copy DMA for host expert weights, pinned token embeddings, and GPU-side miss fallback over PCIe. Stay tuned!
+
+---
+
 ## 🌟 Overview & Attribution
 
 This project combines and refines two key architectural ideas to break the memory wall for Mixture-of-Experts (MoE) and Vision-Language models on consumer GPUs:
