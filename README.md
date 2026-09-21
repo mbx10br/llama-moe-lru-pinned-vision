@@ -41,13 +41,16 @@ On a 16GB GPU (such as the RTX 5060 Ti with 15.6 GB usable VRAM):
 
 ### Test Environment
 * **CPU**: AMD Ryzen 7 5700G (8 cores / 16 threads, Zen 3, 3.8 GHz base / 4.6 GHz boost)
-* **Motherboard**: Gigabyte A520M DS3H V2 (AM4, PCIe 3.0 / PCIe 4.0 support)
+* **Motherboard & Bus**: Gigabyte A520M DS3H V2 running **PCIe 3.0 x16** (Ryzen 5700G APU hardware limitation)
 * **Host RAM**: 48 GB DDR4 (4 sticks in Dual-Channel configuration @ 3200 MHz, 2x16GB + 2x8GB)
 * **GPU**: NVIDIA GeForce RTX 5060 Ti 16GB (Blackwell Architecture, SM 12.0, 16,311 MiB VRAM)
 * **Storage**: Fast NVMe PCIe M.2 SSD (Shard 2 N-gram speculative table memory-mapped via `-lm mmap`)
 * **OS / Environment**: Linux x86_64, CUDA 13.1, NVIDIA Driver 590.48.01
 * **Model**: `Qwen3.8-Flash-Next-GSQ-RCO-GGUF` (Q2_0, 122B total parameters, 512 experts, 10 routed per token)
 * **Context**: 138,000 tokens (`-ctk q5_1 -ctv q5_1 -fa on`)
+
+> [!NOTE]
+> **PCIe 3.0 Real-World Validation**: All benchmarks were achieved on a **PCIe 3.0** bus (limited by the Ryzen 5700G architecture). This demonstrates that this 3-tier offloading architecture does **NOT** require expensive PCIe 4.0/5.0 motherboards to deliver high generation speeds (~15 tokens/sec) for 122B models!
 
 ### Performance Results
 

@@ -35,7 +35,7 @@ flowchart TD
     CPU_Out --> Merge
     Merge --> FinalOut["Next Layer"]
 
-    MMPROJ -.->|DMA / PCIe on-demand| DenseLayers
+    MMPROJ -.->|DMA / PCIe 3.0 on-demand| DenseLayers
 ```
 
 ---
