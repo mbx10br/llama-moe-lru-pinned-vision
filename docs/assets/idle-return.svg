@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="526" viewBox="0 0 1120 526" role="img" aria-labelledby="title desc">
+<title id="title">Use, sleep, return</title><desc id="desc">The model answers with an active expert cache and context. After inactivity it saves compatible conversation state in RAM and releases nearly all model VRAM. Other applications can use the GPU. A new inference request reloads weights and restores a matching cached prefix.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10Z" fill="#8298b0"/></marker></defs>
+<rect width="1120" height="526" rx="24" fill="#0d1729"/>
+<g font-family="DejaVu Sans,Arial,sans-serif">
+<text x="36" y="49" fill="#ffffff" font-size="25" font-weight="bold" text-anchor="start">USE → SLEEP → RETURN</text>
+<text x="36" y="81" fill="#a4b8d0" font-size="18" font-weight="normal" text-anchor="start">A local model that leaves room for the rest of your computer.</text>
+<rect x="36" y="120" width="300" height="108" rx="16" fill="#14243a" stroke="#c4a4ff" stroke-width="1.5"/>
+<text x="54" y="149" fill="#c4a4ff" font-size="19" font-weight="bold" text-anchor="start">1 · USE THE MODEL</text>
+<text x="54" y="178" fill="#dce8f7" font-size="16" font-weight="normal" text-anchor="start">Chat, code, inspect images</text>
+<text x="54" y="201" fill="#dce8f7" font-size="16" font-weight="normal" text-anchor="start">Example loaded VRAM: 6,952 MiB</text>
+<rect x="410" y="120" width="300" height="108" rx="16" fill="#14243a" stroke="#65ded1" stroke-width="1.5"/>
+<text x="428" y="149" fill="#65ded1" font-size="19" font-weight="bold" text-anchor="start">2 · SAVE AND REST</text>
+<text x="428" y="178" fill="#dce8f7" font-size="16" font-weight="normal" text-anchor="start">Idle policy: 20 minutes</text>
+<text x="428" y="201" fill="#dce8f7" font-size="16" font-weight="normal" text-anchor="start">Keep compatible state in RAM</text>
+<path d="M 342 174 L 402 174" fill="none" stroke="#8298b0" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="784" y="120" width="300" height="108" rx="16" fill="#14243a" stroke="#ffd17c" stroke-width="1.5"/>
+<text x="802" y="149" fill="#ffd17c" font-size="19" font-weight="bold" text-anchor="start">3 · FREE THE GPU</text>
+<text x="802" y="178" fill="#dce8f7" font-size="16" font-weight="normal" text-anchor="start">Play, render, run another model</text>
+<text x="802" y="201" fill="#dce8f7" font-size="16" font-weight="normal" text-anchor="start">Example asleep VRAM: 216 MiB</text>
+<path d="M 716 174 L 776 174" fill="none" stroke="#8298b0" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="180" y="308" width="760" height="109" rx="16" fill="#14243a" stroke="#65ded1" stroke-width="1.5"/>
+<text x="204" y="340" fill="#65ded1" font-size="20" font-weight="bold" text-anchor="start">4 · THE NEXT REQUEST</text>
+<text x="204" y="371" fill="#dce8f7" font-size="17" font-weight="normal" text-anchor="start">Reload weights + restore a matching prefix + process the remaining input.</text>
+<text x="204" y="397" fill="#a4b8d0" font-size="16" font-weight="normal" text-anchor="start">Observed cached wakes: 21–24 s, including reload. Times vary by workload.</text>
+<path d="M 934 234 L 934 273 L 762 273 L 762 300" fill="none" stroke="#8298b0" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M 180 363 L 100 363 L 100 236" fill="none" stroke="#8298b0" stroke-width="2.5" marker-end="url(#arrow)" stroke-dasharray="6 5"/>
+<text x="36" y="465" fill="#c4d3e5" font-size="16" font-weight="normal" text-anchor="start">Reuse needs a retained, compatible prefix. Model restart or reboot clears this RAM pool.</text>
+<text x="36" y="493" fill="#94a9c2" font-size="15" font-weight="normal" text-anchor="start">VRAM and wake figures are observations from short text fixtures, not a full 100K replay test.</text>
+</g></svg>

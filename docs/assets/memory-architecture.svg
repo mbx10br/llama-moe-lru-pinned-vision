@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="662" viewBox="0 0 1120 662" role="img" aria-labelledby="title desc">
+<title id="title">One model, three memory roles</title><desc id="desc">Model files live on disk. Pageable expert banks, pinned vision weights and a bounded conversation cache live in host RAM. Active model state, selected experts and temporary vision work use GPU VRAM. Compatible conversation state is saved before sleep and restored on return.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10Z" fill="#8298b0"/></marker></defs>
+<rect width="1120" height="662" rx="24" fill="#0d1729"/>
+<g font-family="DejaVu Sans,Arial,sans-serif">
+<text x="36" y="49" fill="#ffffff" font-size="24" font-weight="bold" text-anchor="start">ONE MODEL · THREE MEMORY ROLES</text>
+<text x="36" y="81" fill="#a4b8d0" font-size="17" font-weight="normal" text-anchor="start">Keep active work close to the GPU. Keep reusable conversation state in RAM.</text>
+<rect x="30" y="111" width="1060" height="183" rx="16" fill="#102b30" stroke="#24585c" stroke-width="1.5"/>
+<text x="49" y="141" fill="#65ded1" font-size="17" font-weight="bold" text-anchor="start">HOST RAM</text>
+<rect x="49" y="158" width="318" height="108" rx="16" fill="#14243a" stroke="#65ded1" stroke-width="1.5"/>
+<text x="67" y="187" fill="#65ded1" font-size="19" font-weight="bold" text-anchor="start">Expert banks</text>
+<text x="67" y="216" fill="#dce8f7" font-size="16" font-weight="normal" text-anchor="start">Pageable / mmap on laptop</text>
+<text x="67" y="239" fill="#dce8f7" font-size="16" font-weight="normal" text-anchor="start">Linux can reclaim file-backed pages</text>
+<rect x="401" y="158" width="318" height="108" rx="16" fill="#14243a" stroke="#65ded1" stroke-width="1.5"/>
+<text x="419" y="187" fill="#65ded1" font-size="19" font-weight="bold" text-anchor="start">Vision weights</text>
+<text x="419" y="216" fill="#dce8f7" font-size="16" font-weight="normal" text-anchor="start">Selectively pinned host RAM</text>
+<text x="419" y="239" fill="#dce8f7" font-size="16" font-weight="normal" text-anchor="start">Stage tensors for CUDA compute</text>
+<rect x="753" y="158" width="318" height="108" rx="16" fill="#14243a" stroke="#65ded1" stroke-width="1.5"/>
+<text x="771" y="187" fill="#65ded1" font-size="19" font-weight="bold" text-anchor="start">Conversation pool</text>
+<text x="771" y="216" fill="#dce8f7" font-size="16" font-weight="normal" text-anchor="start">Saved KV + recurrent states</text>
+<text x="771" y="239" fill="#dce8f7" font-size="16" font-weight="normal" text-anchor="start">Includes APEX checkpoints</text>
+<rect x="30" y="373" width="1060" height="183" rx="16" fill="#23203d" stroke="#51456b" stroke-width="1.5"/>
+<text x="49" y="404" fill="#c4a4ff" font-size="17" font-weight="bold" text-anchor="start">GPU VRAM · WHILE THE MODEL IS ACTIVE</text>
+<rect x="49" y="420" width="318" height="108" rx="16" fill="#14243a" stroke="#c4a4ff" stroke-width="1.5"/>
+<text x="67" y="449" fill="#c4a4ff" font-size="19" font-weight="bold" text-anchor="start">Bounded expert cache</text>
+<text x="67" y="478" fill="#dce8f7" font-size="16" font-weight="normal" text-anchor="start">Recently useful expert weights</text>
+<text x="67" y="501" fill="#dce8f7" font-size="16" font-weight="normal" text-anchor="start">3,712 MiB in the laptop profile</text>
+<rect x="401" y="420" width="318" height="108" rx="16" fill="#14243a" stroke="#c4a4ff" stroke-width="1.5"/>
+<text x="419" y="449" fill="#c4a4ff" font-size="19" font-weight="bold" text-anchor="start">Temporary vision work</text>
+<text x="419" y="478" fill="#dce8f7" font-size="16" font-weight="normal" text-anchor="start">GPU buffers + CUDA kernels</text>
+<text x="419" y="501" fill="#dce8f7" font-size="16" font-weight="normal" text-anchor="start">Weights stay in host RAM</text>
+<rect x="753" y="420" width="318" height="108" rx="16" fill="#14243a" stroke="#c4a4ff" stroke-width="1.5"/>
+<text x="771" y="449" fill="#c4a4ff" font-size="19" font-weight="bold" text-anchor="start">Active model context</text>
+<text x="771" y="478" fill="#dce8f7" font-size="16" font-weight="normal" text-anchor="start">Dense layers + active KV/state</text>
+<text x="771" y="501" fill="#dce8f7" font-size="16" font-weight="normal" text-anchor="start">Released when entering sleep</text>
+<path d="M 208 269 L 208 367" fill="none" stroke="#8298b0" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="221" y="335" fill="#a4b8d0" font-size="15" font-weight="normal" text-anchor="start">selected weights</text>
+<path d="M 560 269 L 560 367" fill="none" stroke="#8298b0" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="574" y="335" fill="#a4b8d0" font-size="15" font-weight="normal" text-anchor="start">GPU staging</text>
+<path d="M 881 367 L 881 270" fill="none" stroke="#8298b0" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="898" y="318" fill="#a4b8d0" font-size="14" font-weight="normal" text-anchor="start">save</text>
+<path d="M 1008 270 L 1008 367" fill="none" stroke="#8298b0" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="1024" y="359" fill="#a4b8d0" font-size="14" font-weight="normal" text-anchor="start">restore</text>
+<rect x="30" y="579" width="1060" height="56" rx="16" fill="#322819" stroke="#735e30" stroke-width="1.5"/>
+<text x="49" y="614" fill="#ffd17c" font-size="16" font-weight="bold" text-anchor="start">STORAGE</text>
+<text x="174" y="614" fill="#dce8f7" font-size="16" font-weight="normal" text-anchor="start">GGUF model files → reload weights on demand. RAM snapshots last within the running process.</text>
+</g></svg>

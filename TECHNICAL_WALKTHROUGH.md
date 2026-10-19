@@ -1,5 +1,7 @@
 # Technical Walkthrough: MoE LRU Cache + Pinned Host Vision (CUDA_Host)
 
+> **Scope:** this walkthrough documents the original September 2026 slot-based patch. For current memory policy, sleep/cache integration, experimental checkpoints and measured results, see the [project overview](README.md). Vision staging and host-registration terminology are clarified there.
+
 This document provides a line-by-line technical explanation of the codebase modifications that enable running a 122B parameter Mixture-of-Experts (MoE) model on a 16GB consumer GPU via a 3-tier memory offloading architecture (VRAM + RAM + NVMe).
 
 ---
