@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "status": "passed",
-  "cpu_tests_passed": 29,
+  "cpu_tests_passed": 43,
   "cpu_test_command": "python3 -I -m unittest discover -s integrations/tabby/tests -v",
   "public_clone_base_check_passed": true,
   "patch_applies_cleanly": true,
@@ -17,5 +17,16 @@
   "inference_calls": 0,
   "production_changes": 0,
   "patch_sha256": "d864eeed8fca9a1ef6c9ce7f5256581272c1cefe2924149499a73f006a817e5b",
-  "export_step_performed_git_mutation": false
+  "export_step_performed_git_mutation": false,
+  "previous_cpu_tests_passed": 29,
+  "base1_fix_export": {
+    "tested_source_sha256": "65f35b4a850fcce5a0807f10decca1b855d7e136398d97f7102e6ecf08de7325",
+    "exported_source_sha256": "d967f3bd5293bbaf3c92a9bdbb552d398bb6a0cb6fd39e840cde739ac3c9c85a",
+    "header_only_difference": true,
+    "new_regression_cases_passed": 14,
+    "full_native_source_bundled": false,
+    "gpu_checks_in_export_step": 0,
+    "separate_deployment_gpu_cases_passed": 8
+  },
+  "isolated_copy_cpu_tests_passed": 43
 }

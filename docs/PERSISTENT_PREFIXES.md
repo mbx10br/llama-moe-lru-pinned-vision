@@ -78,7 +78,7 @@ the original request unchanged.
 
 | Component | Export and compatibility |
 | --- | --- |
-| llama.cpp | [Native patch and hash manifest](../patches/llama.cpp/), exact base `620d2225cc436ab0b001e3200e590e3b286ef9ab` |
+| llama.cpp | [Versioned native patches and hash manifests](../patches/llama.cpp/): current qualified base `39da130fcd1b6ca47d3c0522a40eccff41ea3dfb`; original `620d2225cc436ab0b001e3200e590e3b286ef9ab` preserved |
 | llama.cpp host controller | [Portable modules and model-free tests](../integrations/llama_cpp/); caller owns serialization, identities and private native transport |
 | Hermes / Superpowers | [Separate integration](../integrations/hermes/); exact upstream revisions and legacy hook differences documented there |
 | Tabby / EXL3 | [Optional AGPL-3.0 integration](../integrations/tabby/); separate engine, dependency versions and source contract |
@@ -90,12 +90,19 @@ llama.cpp patch. Source packaging does not update the active local runtimes.
 
 ## Tested laptop configuration
 
-The source patch was built for Linux/CUDA 13.1/SM86 and exercised with Ornith
+The original source patch was built for Linux/CUDA 13.1/SM86 and exercised with Ornith
 1.5 35B A3B Q4_K_M on an RTX 3070 Ti Laptop GPU. The tested process used one
 slot, 102,400 context tokens, Q8_0 K/V, batch 512, microbatch 128, a 3,712 MiB
 expert cache, a 3,072 MiB RAM prompt pool, four checkpoints and 1,200-second
 idle sleep. Expert banks remained pageable/mmap; immutable vision weights were
 pinned; MTP/DFlash and optional whole-expert host registration were off.
+
+The later 39da130f refresh was built with CUDA 13.1.1/SM86 and qualified with
+the same model at **131,072 context tokens, Q8_0 K / Q5_1 V, 3,968 MiB experts**,
+the same 3,072 MiB RAM pool and four checkpoints. Batch/microbatch remain 512/128,
+one slot and speculation off. Vision remains selectively pinned; expert banks
+remain pageable. The original numerical tables describe their original recipes;
+changing the KV/context geometry requires preparing compatible SSD bases again.
 
 An illustrative native launch, after applying the pinned patch:
 

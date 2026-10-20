@@ -1,4 +1,30 @@
-# Tested native bundle: pinned vision, sleep and protected-prefix selection
+# Native bundles: pinned vision, sleep and protected-prefix selection
+
+Two independent, pinned generations are available. Apply exactly one bundle to
+its matching upstream commit; do not stack them.
+
+| Generation | Upstream base | Manifest |
+| --- | --- | --- |
+| Original tested integration | `620d2225cc436ab0b001e3200e590e3b286ef9ab` | [manifest.json](manifest.json) |
+| Latest source refresh | `39da130fcd1b6ca47d3c0522a40eccff41ea3dfb` | [manifest-39da130f.json](manifest-39da130f.json) |
+
+The newer [39da130f bundle](39da130f-sleep-grid-dual-prefix.patch) retains upstream
+expert SLRU and checkpoint invalidation, includes the private restore contracts,
+and registers the prefix-selection test with CMake. Its manifest records the
+qualification status separately; historical measurements below remain historical.
+
+Verify the newer generation without loading a model:
+
+```sh
+python3 tools/verify_native_patch.py --source /path/to/llama.cpp \
+  --manifest manifest-39da130f.json --compile-policy
+```
+
+For that build, substitute the full `39da130f...` revision and matching patch in
+the commands below. The registered `test-server-prefix-selection` target can
+also be built and run alongside `test-server-component`.
+
+## Original generation
 
 Apply `620d2225-sleep-grid-dual-prefix.patch` to **exactly** llama.cpp commit
 `620d2225cc436ab0b001e3200e590e3b286ef9ab`. That upstream revision already has

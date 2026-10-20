@@ -1,0 +1,183 @@
+{
+  "base_commit": "39da130fcd1b6ca47d3c0522a40eccff41ea3dfb",
+  "upstream": "https://github.com/ggml-org/llama.cpp",
+  "base_commit_subject": "ggml-cuda : support ssm_conv kernel size 7 (#30873)",
+  "base_commit_date": "2026-10-20T17:47:44+02:00",
+  "patch": "39da130f-sleep-grid-dual-prefix.patch",
+  "patch_sha256": "c1dfb292e0d2f9122c9a2e0a1985c3a18b9afee4effbde9bcab2e26e77164341",
+  "files": {
+    "ggml/src/ggml-cuda/ggml-cuda.cu": {
+      "before_sha256": "347ac9ec36785c4cfed99e4a6279fd4e51785d3ac9994638faa913a8b62e4d01",
+      "after_sha256": "535687c08d8f61c1f01157c2c02abeaebed434d4fa259aeec7c02e1640344be5"
+    },
+    "src/llama-moe-cache.cpp": {
+      "before_sha256": "7d896685c5a80645fcbb5a340ee4fdb2a7d39982451da4a5631d910155caaefe",
+      "after_sha256": "7c8932e0ab76cb15919cef41db6335165865630324d95898421a5e4ce39c05ab"
+    },
+    "tests/CMakeLists.txt": {
+      "before_sha256": "d1e60fec1ea04cfce88095c7c462c177a60f7b0ce4c0ed94f35f5b9b5e48eed4",
+      "after_sha256": "06fcb994284a829236673b8e4b4067e7a0d142a417a28ea0af618842a17f0e96"
+    },
+    "tests/test-server-component.cpp": {
+      "before_sha256": "643a8088f4df36109e39a26c2ec263aecbfef8cce2d55c8085e19221e3607bc2",
+      "after_sha256": "e16d66f4e7509819798ba2c511240fe2f3c02d3841f65f7f407e0d33141ab8dd"
+    },
+    "tests/test-server-prefix-selection.cpp": {
+      "before_sha256": null,
+      "after_sha256": "17c6b4f45fa174e57e1a9bb08825f1bcb98fe71b8d06250b3e4820e25a7aa65f"
+    },
+    "tools/mtmd/clip.cpp": {
+      "before_sha256": "033b2cce2772895a40eef6b37d4202b060ef163e23dd3dc8373a7b826d9028b2",
+      "after_sha256": "17affa6d36ea1a49ac42378a41ed84029dc1888259c41d6b3518788761830928"
+    },
+    "tools/server/server-common.h": {
+      "before_sha256": "ee401cf81ed0fb515f9870b018c762074903e72712dcb81a652e49761fe1577b",
+      "after_sha256": "4e5207d3822ac09b040eedb44a9988f7e15c8e377b8c215cc8040722ec245ce4"
+    },
+    "tools/server/server-context.cpp": {
+      "before_sha256": "dd1de0f26536ce3e115e39110f2f0719427f2796885c2a1ea2db071b603c2329",
+      "after_sha256": "bb490e4fe3c5a31b65c3e5203b940f9ba9787fb0f3b5d79fd47fb50b615b530a"
+    },
+    "tools/server/server-prefix-selection.h": {
+      "before_sha256": null,
+      "after_sha256": "6164e858f3645f6d3dbea98f505d5f43b5c39d959044544da11165973f5b4e96"
+    },
+    "tools/server/server-task.cpp": {
+      "before_sha256": "70506bc8d1c0ac625d44432e05d2c1e8d2403d1629629b7ed817ce91b9816920",
+      "after_sha256": "ed7ec63a7dc224607b7f0d5cb07f3ce265378ae7a44189237046a37378dd7e79"
+    },
+    "tools/server/server-task.h": {
+      "before_sha256": "ffd0ac6e1d0f0af63c35d1fd07347e3ec6b3746769667e55742521c7d0c5904f",
+      "after_sha256": "29454f7396b25cd5167b853beb82c10f16605572d9fc637b947a2371d4d0fc45"
+    }
+  },
+  "source_status": "Byte-for-byte export of the CUDA-built and real-model GPU-qualified source. The matching library and executable were adopted in the local laptop runtime without editing its production profile.",
+  "provenance": {
+    "prior_generation": {
+      "base_commit": "620d2225cc436ab0b001e3200e590e3b286ef9ab",
+      "patch": "620d2225-sleep-grid-dual-prefix.patch",
+      "patch_sha256": "838fffd9451817d225b81863a446e058ed481f0232301233c5301bcef6635b89"
+    },
+    "port": "Existing private pinned-vision/DMA and sleep-cache changes, with the previously tested checkpoint-grid and private prefix-selector adaptation ported onto the pinned official source. The historical patch and manifest are retained unchanged.",
+    "upstream_expert_lru": "https://github.com/ggml-org/llama.cpp/pull/27861",
+    "upstream_expert_slru": "https://github.com/ggml-org/llama.cpp/pull/30637",
+    "upstream_checkpoint_invalidation": "https://github.com/ggml-org/llama.cpp/pull/30666",
+    "checkpoint_inspiration": "https://github.com/VectorAnvil/apex-r9700/blob/main/v2/reports/cache-coverage.md",
+    "review": "The parent port review confirmed that the upstream expert SLRU class and n_prefix checkpoint invalidation are preserved byte-for-byte. Packaging verifies source identity and does not assert unperformed platform or model tests.",
+    "license": "MIT; upstream notices retained. See licenses/llama.cpp-MIT.txt.",
+    "ai_assistance": "Source adaptation, tests and packaging were assisted by Codex under the repository owner's direction; no upstream submission is made."
+  },
+  "build_validation": {
+    "cuda_build": "passed",
+    "cuda_toolkit": "13.1.1",
+    "platform": "Linux x86_64",
+    "cuda_architectures": "86-real",
+    "cmake_type": "Release",
+    "cmake_options": {
+      "GGML_CUDA": true,
+      "GGML_NATIVE": false,
+      "GGML_CUDA_FA_ALL_QUANTS": true,
+      "LLAMA_USE_SYSTEM_GGML": false,
+      "LLAMA_BUILD_TESTS": true,
+      "LLAMA_BUILD_EXAMPLES": false,
+      "LLAMA_BUILD_APP": false,
+      "LLAMA_OPENSSL": false
+    },
+    "targets": [
+      "llama-server",
+      "test-server-component",
+      "test-server-prefix-selection"
+    ],
+    "component_tests": {
+      "cases": 41,
+      "assertions": 172,
+      "failures": 0,
+      "exceptions": 0,
+      "skipped": 0,
+      "log_sha256": "842fb52765a2808770d0b8425e43d956762f8f6def1bbdcbcc702463bfa86b42"
+    },
+    "prefix_selection": {
+      "assertions": 15,
+      "result": "prefix selection invariants passed",
+      "log_sha256": "e32dbfcbcf8546df66d606f958714442a57f35b108615922cdb0dfcaf063b7f7"
+    },
+    "gpu_acceptance": {
+      "status": "passed",
+      "canonical_l3": {
+        "passed": 23,
+        "total": 23,
+        "attempts": 1,
+        "seed": 42,
+        "max_tokens": 32768
+      },
+      "vision": "Red square correctly identified; selective host vision with CUDA compute",
+      "dual_prefix_cases": 5,
+      "sleep_process_vram_mib": 256,
+      "sleep_prompt_payload_mib": 938.851,
+      "same_process_wake": true,
+      "fresh_process_ssd_restore_bases": 2,
+      "matched512_generation_tps": {
+        "baseline": 41.75106755273707,
+        "candidate": 44.468427807857054
+      },
+      "limits": "Short cache fixtures and one canonical L3; allocated131072, not a full131K stress test. Real client base regeneration is reported separately."
+    },
+    "build_log_sha256": "a5e19ab24bf670262f304324a4af90481f33009ba7136d14487d332679f74c1c",
+    "version_log_sha256": "9db1166975e6a16b204c3f89371f119091fab1e714c547053171c44b3d3d1f35"
+  },
+  "export_validation": {
+    "git_apply_cached_check": "passed with --whitespace=error using a temporary GIT_INDEX_FILE initialized by git read-tree of the pinned base",
+    "applied_index_source_files": 11,
+    "applied_index_file_sha256": "All 11 post-images match the working source bytes exactly.",
+    "source_index_unchanged": true,
+    "source_files_unchanged": true,
+    "production_files_or_services_changed": false,
+    "new_files_included": [
+      "tests/test-server-prefix-selection.cpp",
+      "tools/server/server-prefix-selection.h"
+    ],
+    "cmake_test_registration_included": true,
+    "temporary_tree_application": "passed with --whitespace=error; all 11 file SHA-256 post-images match",
+    "exported_policy_compile": "passed: c++ -std=c++17 -O2 -Wall -Wextra -Werror -DNDEBUG",
+    "exported_policy_run": "passed: prefix selection invariants passed; assertions explicitly remain active under NDEBUG",
+    "historical_generation_unchanged": true
+  },
+  "runtime_contracts": {
+    "checkpoint_grid": "ORNITH_CHECKPOINT_GRID=1; one slot, four checkpoints, text-only, no SWA/LoRA/speculation/cache-reuse-shifting eligibility guards retained",
+    "private_restore_fields": [
+      "restore_if_better",
+      "preserve_active_only",
+      "target_tokens",
+      "expected_prefix_tokens"
+    ],
+    "feature_markers": [
+      "supports_prefix_restore_if_better",
+      "supports_prefix_preserve_active"
+    ],
+    "saved_slot_format_changed": false,
+    "expert_host_registration": "Optional GGML_CUDA_REGISTER_HOST; unset in the shared laptop setup. Ordinary host buffers honor GGML_CUDA_NO_PINNED.",
+    "vision": "ORNITH_MMPROJ_HOST_WEIGHTS=1 selectively pins immutable vision weights; computation remains strict CUDA with temporary staging."
+  },
+  "limits": [
+    "Apply this generation only to its exact base commit; do not stack it with historical project patches.",
+    "Build, CPU and real-model acceptance cover the recorded configuration and workloads; no universal platform, full-context quality or statistical speed claim is made.",
+    "Experimental grid recovery may produce later-token numerical differences; universal bitwise output parity is not claimed.",
+    "Private SSD restoration requires a trusted supervisor validating model/configuration and checkpoint identity.",
+    "Linux shared-memory behavior is not equivalent to pinning the entire model: whole-expert registration can reduce reclaimable memory and zram flexibility.",
+    "No binary weights, model prompts, token checkpoint files, host-specific deployment configuration or secrets are included."
+  ],
+  "deployment_qualification": {
+    "status": "passed, permanent local runtime",
+    "production_profile_changed": false,
+    "real_client_pre_user_bases": {
+      "web_tokens": 16686,
+      "telegram_tokens": 22976,
+      "ready": 2
+    },
+    "real_client_private_cases_passed": 7,
+    "real_public_fifo_cases_passed": 2,
+    "ssd_hashes_unchanged_after_returns": true,
+    "benchmark": "../../benchmarks/upstream-refresh-20261020.json",
+    "notes": "Private stages validated sleep and native restart; corrected public tests use actual client-format payloads. No Telegram messages or real tools executed."
+  }
+}

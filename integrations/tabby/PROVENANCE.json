@@ -15,9 +15,15 @@
     },
     {
       "path": "common/permanent_prefix.py",
-      "tested_sha256": "6b917554f96b53e508c954341bb6e8060d656210b2e92b2a8580b0e7f53ec413",
-      "exported_sha256": "c504553d8f578a49584a353c209a70af7a8725030faa06d87758f9b17d349cd3",
-      "export_difference": "SPDX/export-date comment header only"
+      "tested_sha256": "65f35b4a850fcce5a0807f10decca1b855d7e136398d97f7102e6ecf08de7325",
+      "exported_sha256": "d967f3bd5293bbaf3c92a9bdbb552d398bb6a0cb6fd39e840cde739ac3c9c85a",
+      "export_difference": "SPDX/export-date comment header only",
+      "prior_qualification": {
+        "tested_sha256": "6b917554f96b53e508c954341bb6e8060d656210b2e92b2a8580b0e7f53ec413",
+        "exported_sha256": "c504553d8f578a49584a353c209a70af7a8725030faa06d87758f9b17d349cd3",
+        "export_difference": "SPDX/export-date comment header only"
+      },
+      "qualification": "Base 1 exact anchor, immutable publication and paired-layout fix; 2026-10-20"
     },
     {
       "path": "common/prefix_selection.py",
@@ -128,5 +134,17 @@
     "network/firewall/system-service configuration",
     "host GPU scheduler/lifecycle executables",
     "unauthenticated extra HTTP cache-stats route"
-  ]
+  ],
+  "base1_fix": {
+    "date": "2026-10-20",
+    "native_source_changed": false,
+    "export_native_source_bundled": false,
+    "portable_tests_use": "Explicit small native-layout fixtures, exported helpers, real temporary filesystem publication",
+    "external_qualification": {
+      "native_ast_cpu_cases_passed": 19,
+      "gpu_request_cases_passed": 8,
+      "native_ast_cpu_harness_bundled": false,
+      "reason": "Deployment harness extracts native methods from separately installed MIT EXL3 v1.6.3; portable export does not depend on that local tree."
+    }
+  }
 }

@@ -1,0 +1,567 @@
+{
+  "date": "2026-10-20",
+  "status": "passed, adopted locally",
+  "upstream_commit": "39da130fcd1b6ca47d3c0522a40eccff41ea3dfb",
+  "patch": "../patches/llama.cpp/39da130f-sleep-grid-dual-prefix.patch",
+  "model": "Ornith-1.5-35B-A3B Q4_K_M",
+  "hardware": "RTX3070TiLaptop8GiB; Linux; CUDA13.1.1/SM86",
+  "profile": {
+    "context": 131072,
+    "parallel": 1,
+    "cache_k": "q8_0",
+    "cache_v": "q5_1",
+    "experts_mib": 3968,
+    "prompt_ram_mib": 3072,
+    "checkpoints": 4,
+    "checkpoint_grid": true,
+    "batch": 512,
+    "ubatch": 128,
+    "speculation": "none",
+    "idle_seconds": 1200,
+    "vision": "selective pinned host weights, CUDA compute",
+    "expert_host_registration": false
+  },
+  "cpu": {
+    "component_cases": 41,
+    "component_assertions": 172,
+    "selector_assertions": 15,
+    "portable_controller_tests": 12
+  },
+  "cache_fixtures": {
+    "baseline": {
+      "cold": {
+        "seconds": 40.49390111101093,
+        "timings": {
+          "cache_n": 0,
+          "prompt_n": 2304,
+          "prompt_ms": 40251.483,
+          "prompt_per_token_ms": 17.47026171875,
+          "prompt_per_second": 57.24012702836315,
+          "predicted_n": 2,
+          "predicted_ms": 225.057,
+          "predicted_per_token_ms": 225.057,
+          "predicted_per_second": 4.443318803680846
+        }
+      },
+      "edit85": {
+        "seconds": 6.672154917032458,
+        "timings": {
+          "cache_n": 1536,
+          "prompt_n": 768,
+          "prompt_ms": 6611.146,
+          "prompt_per_token_ms": 8.608263020833332,
+          "prompt_per_second": 116.1674541751158,
+          "predicted_n": 2,
+          "predicted_ms": 49.431,
+          "predicted_per_token_ms": 49.431,
+          "predicted_per_second": 20.23021990249034
+        }
+      },
+      "repeat": {
+        "seconds": 0.10339107899926603,
+        "timings": {
+          "cache_n": 2300,
+          "prompt_n": 4,
+          "prompt_ms": 78.724,
+          "prompt_per_token_ms": 19.681,
+          "prompt_per_second": 50.81042629947665,
+          "predicted_n": 2,
+          "predicted_ms": 16.919,
+          "predicted_per_token_ms": 16.919,
+          "predicted_per_second": 59.10514805839588
+        }
+      }
+    },
+    "candidate": {
+      "cold": {
+        "seconds": 32.67501033702865,
+        "timings": {
+          "cache_n": 0,
+          "prompt_n": 2304,
+          "prompt_ms": 32311.85,
+          "prompt_per_token_ms": 14.024240451388888,
+          "prompt_per_second": 71.3051094257989,
+          "predicted_n": 2,
+          "predicted_ms": 348.669,
+          "predicted_per_token_ms": 348.669,
+          "predicted_per_second": 2.8680496402031728
+        }
+      },
+      "edit85": {
+        "seconds": 5.934557501983363,
+        "timings": {
+          "cache_n": 1536,
+          "prompt_n": 768,
+          "prompt_ms": 5884.767,
+          "prompt_per_token_ms": 7.66245703125,
+          "prompt_per_second": 130.50644146148863,
+          "predicted_n": 2,
+          "predicted_ms": 38.344,
+          "predicted_per_token_ms": 38.344,
+          "predicted_per_second": 26.079699561861048
+        }
+      },
+      "repeat": {
+        "seconds": 0.10453558102017269,
+        "timings": {
+          "cache_n": 2300,
+          "prompt_n": 4,
+          "prompt_ms": 79.87,
+          "prompt_per_token_ms": 19.9675,
+          "prompt_per_second": 50.08138224614999,
+          "predicted_n": 2,
+          "predicted_ms": 17.707,
+          "predicted_per_token_ms": 17.707,
+          "predicted_per_second": 56.4748404585757
+        }
+      }
+    }
+  },
+  "cache_fixture_token_comparison": {
+    "cold": true,
+    "edit85": true,
+    "repeat": true
+  },
+  "l3": {
+    "success": true,
+    "passed": 23,
+    "total": 23,
+    "seed": 42,
+    "seconds": 507.5000595480087,
+    "timings": {
+      "cache_n": 0,
+      "prompt_n": 275,
+      "prompt_ms": 21662.962,
+      "prompt_per_token_ms": 78.77440727272727,
+      "prompt_per_second": 12.694478252789255,
+      "predicted_n": 12161,
+      "predicted_ms": 485765.016,
+      "predicted_per_token_ms": 39.94778092105263,
+      "predicted_per_second": 25.03267958679017
+    },
+    "usage": {
+      "completion_tokens": 12161,
+      "prompt_tokens": 275,
+      "total_tokens": 12436,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      }
+    },
+    "finish_reason": "stop",
+    "format_ok": true
+  },
+  "l3_protocol": {
+    "id": "kv51-l3-native-matched35",
+    "server_reasoning": {
+      "type": "unrestricted",
+      "tokens": null,
+      "native_effort_claim": null
+    },
+    "request_parameters": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "max_tokens": 32768
+    },
+    "timeout_seconds": 3600
+  },
+  "matched_generation": {
+    "runs": {
+      "baseline": [
+        {
+          "max_tokens": 128,
+          "seconds": 15.782852216041647,
+          "usage": {
+            "completion_tokens": 128,
+            "prompt_tokens": 46,
+            "total_tokens": 174,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 46,
+            "prompt_ms": 7037.681,
+            "prompt_per_token_ms": 152.9930652173913,
+            "prompt_per_second": 6.536243970137322,
+            "predicted_n": 128,
+            "predicted_ms": 8719.441,
+            "predicted_per_token_ms": 68.6570157480315,
+            "predicted_per_second": 14.565153890025746
+          },
+          "finish_reason": "length"
+        },
+        {
+          "max_tokens": 512,
+          "seconds": 12.704235603974666,
+          "usage": {
+            "completion_tokens": 512,
+            "prompt_tokens": 46,
+            "total_tokens": 558,
+            "prompt_tokens_details": {
+              "cached_tokens": 42
+            }
+          },
+          "timings": {
+            "cache_n": 42,
+            "prompt_n": 4,
+            "prompt_ms": 315.044,
+            "prompt_per_token_ms": 78.761,
+            "prompt_per_second": 12.696639199603865,
+            "predicted_n": 512,
+            "predicted_ms": 12239.208,
+            "predicted_per_token_ms": 23.95148336594912,
+            "predicted_per_second": 41.75106755273707
+          },
+          "finish_reason": "length"
+        }
+      ],
+      "candidate": [
+        {
+          "max_tokens": 128,
+          "seconds": 15.986931830004323,
+          "usage": {
+            "completion_tokens": 128,
+            "prompt_tokens": 46,
+            "total_tokens": 174,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 46,
+            "prompt_ms": 7051.208,
+            "prompt_per_token_ms": 153.2871304347826,
+            "prompt_per_second": 6.523704874398827,
+            "predicted_n": 128,
+            "predicted_ms": 8913.376,
+            "predicted_per_token_ms": 70.18406299212599,
+            "predicted_per_second": 14.248248923864537
+          },
+          "finish_reason": "length"
+        },
+        {
+          "max_tokens": 512,
+          "seconds": 11.924194735009223,
+          "usage": {
+            "completion_tokens": 512,
+            "prompt_tokens": 46,
+            "total_tokens": 558,
+            "prompt_tokens_details": {
+              "cached_tokens": 42
+            }
+          },
+          "timings": {
+            "cache_n": 42,
+            "prompt_n": 4,
+            "prompt_ms": 260.419,
+            "prompt_per_token_ms": 65.10475,
+            "prompt_per_second": 15.359862375633115,
+            "predicted_n": 512,
+            "predicted_ms": 11491.299,
+            "predicted_per_token_ms": 22.487864970645795,
+            "predicted_per_second": 44.468427807857054
+          },
+          "finish_reason": "length"
+        }
+      ]
+    },
+    "candidate_baseline_ratio": 1.0650848089497975,
+    "method": "Same prompt/sampling/profile.128-token warmup then512-token generation. One ordered pair."
+  },
+  "synthetic_prefix_cases": [
+    {
+      "label": "A-prime",
+      "seconds": 13.526899551041424,
+      "usage": {
+        "completion_tokens": 2,
+        "prompt_tokens": 672,
+        "total_tokens": 674,
+        "prompt_tokens_details": {
+          "cached_tokens": 656
+        }
+      },
+      "prefix": {
+        "state": "ready",
+        "count_ready": 1,
+        "tokens": 656,
+        "bytes": 203699708,
+        "storage_used_bytes": 203699708
+      }
+    },
+    {
+      "label": "B-prime",
+      "seconds": 6.590170183044393,
+      "usage": {
+        "completion_tokens": 2,
+        "prompt_tokens": 672,
+        "total_tokens": 674,
+        "prompt_tokens_details": {
+          "cached_tokens": 656
+        }
+      },
+      "prefix": {
+        "state": "ready",
+        "count_ready": 2,
+        "tokens": 656,
+        "bytes": 203699708,
+        "storage_used_bytes": 407399416
+      }
+    },
+    {
+      "label": "A-after-sleep",
+      "seconds": 29.594123116054107,
+      "usage": {
+        "completion_tokens": 2,
+        "prompt_tokens": 672,
+        "total_tokens": 674,
+        "prompt_tokens_details": {
+          "cached_tokens": 668
+        }
+      },
+      "prefix": {
+        "state": "ready",
+        "count_ready": 2,
+        "tokens": 656,
+        "bytes": 203699708,
+        "storage_used_bytes": 407399416
+      }
+    },
+    {
+      "label": "A-after-restart",
+      "seconds": 42.419915531005245,
+      "usage": {
+        "completion_tokens": 2,
+        "prompt_tokens": 672,
+        "total_tokens": 674,
+        "prompt_tokens_details": {
+          "cached_tokens": 656
+        }
+      },
+      "prefix": {
+        "state": "ready",
+        "count_ready": 2,
+        "tokens": 656,
+        "bytes": 203699708,
+        "storage_used_bytes": 407399416
+      }
+    },
+    {
+      "label": "B-after-restart",
+      "seconds": 0.7805892319884151,
+      "usage": {
+        "completion_tokens": 2,
+        "prompt_tokens": 672,
+        "total_tokens": 674,
+        "prompt_tokens_details": {
+          "cached_tokens": 656
+        }
+      },
+      "prefix": {
+        "state": "ready",
+        "count_ready": 2,
+        "tokens": 656,
+        "bytes": 203699708,
+        "storage_used_bytes": 407399416
+      }
+    }
+  ],
+  "synthetic_sleep": {
+    "states": 3,
+    "payload_mib": 938.851,
+    "process_vram_mib": 256,
+    "same_process_wake": true
+  },
+  "vision_smoke": "192x192 red square correctly named Red",
+  "real_prefix_private_cases": [
+    {
+      "label": "rebuild",
+      "client": "web",
+      "seconds": 226.8236903049983,
+      "prefix": {
+        "state": "ready",
+        "count_ready": 1,
+        "tokens": 16686,
+        "bytes": 484635884,
+        "storage_used_bytes": 1027819088
+      }
+    },
+    {
+      "label": "rebuild",
+      "client": "telegram",
+      "seconds": 214.09217110596364,
+      "prefix": {
+        "state": "ready",
+        "count_ready": 2,
+        "tokens": 22976,
+        "bytes": 543183204,
+        "storage_used_bytes": 1027819088
+      }
+    },
+    {
+      "label": "alternate",
+      "client": "web",
+      "seconds": 31.06352985202102,
+      "request_seconds": 16.23979862302076,
+      "usage": {
+        "completion_tokens": 3,
+        "prompt_tokens": 16794,
+        "total_tokens": 16797,
+        "prompt_tokens_details": {
+          "cached_tokens": 16686
+        }
+      },
+      "prefix": {
+        "state": "ready",
+        "count_ready": 2,
+        "tokens": 16686,
+        "bytes": 484635884,
+        "storage_used_bytes": 1027819088
+      }
+    },
+    {
+      "label": "alternate",
+      "client": "telegram",
+      "seconds": 1.0658834149944596,
+      "request_seconds": 3.1262273670290597,
+      "usage": {
+        "completion_tokens": 2,
+        "prompt_tokens": 23055,
+        "total_tokens": 23057,
+        "prompt_tokens_details": {
+          "cached_tokens": 22976
+        }
+      },
+      "prefix": {
+        "state": "ready",
+        "count_ready": 2,
+        "tokens": 22976,
+        "bytes": 543183204,
+        "storage_used_bytes": 1027819088
+      }
+    },
+    {
+      "label": "after-sleep",
+      "client": "web",
+      "seconds": 32.575714896956924,
+      "request_seconds": 2.160784380044788,
+      "usage": {
+        "completion_tokens": 3,
+        "prompt_tokens": 16794,
+        "total_tokens": 16797,
+        "prompt_tokens_details": {
+          "cached_tokens": 16790
+        }
+      },
+      "prefix": {
+        "state": "ready",
+        "count_ready": 2,
+        "tokens": 16686,
+        "bytes": 484635884,
+        "storage_used_bytes": 1027819088
+      }
+    },
+    {
+      "label": "after-native-restart",
+      "client": "telegram",
+      "seconds": 33.05926308402559,
+      "request_seconds": 11.379968252032995,
+      "usage": {
+        "completion_tokens": 2,
+        "prompt_tokens": 23055,
+        "total_tokens": 23057,
+        "prompt_tokens_details": {
+          "cached_tokens": 22976
+        }
+      },
+      "prefix": {
+        "state": "ready",
+        "count_ready": 2,
+        "tokens": 22976,
+        "bytes": 543183204,
+        "storage_used_bytes": 1027819088
+      }
+    },
+    {
+      "label": "after-native-restart",
+      "client": "web",
+      "seconds": 1.3437097339774482,
+      "request_seconds": 5.262492973997723,
+      "usage": {
+        "completion_tokens": 3,
+        "prompt_tokens": 16794,
+        "total_tokens": 16797,
+        "prompt_tokens_details": {
+          "cached_tokens": 16686
+        }
+      },
+      "prefix": {
+        "state": "ready",
+        "count_ready": 2,
+        "tokens": 16686,
+        "bytes": 484635884,
+        "storage_used_bytes": 1027819088
+      }
+    }
+  ],
+  "real_prefix_sleep": {
+    "sleep_cache_states": 2,
+    "sleep_cache_mib": 981.739
+  },
+  "real_public_fifo_cases": [
+    {
+      "client": "web",
+      "request_seconds": 51.90178322303109,
+      "usage": {
+        "completion_tokens": 3,
+        "prompt_tokens": 16794,
+        "total_tokens": 16797,
+        "prompt_tokens_details": {
+          "cached_tokens": 16686
+        }
+      }
+    },
+    {
+      "client": "telegram",
+      "request_seconds": 3.5549605219857767,
+      "usage": {
+        "completion_tokens": 2,
+        "prompt_tokens": 23055,
+        "total_tokens": 23057,
+        "prompt_tokens_details": {
+          "cached_tokens": 22976
+        }
+      }
+    }
+  ],
+  "production_profile_unchanged": true,
+  "ssd_bases_ready": 2,
+  "tool_calls": 0,
+  "telegram_messages": 0,
+  "evidence_sha256": {
+    "probe.json": "968815866a776d1c57ec44f9dc6e90e3f67a08496fffdfa663f2f127332e1d5f",
+    "attempt2/probe.json": "a44b1a0cd0ed006a0d596518d4a0d258582d662c49cdbcc9bd272d2f20c20e30",
+    "speed.json": "667494e4a08b2c3393b94c17236f4ce397f474d983e15d44500429ec559c43e5",
+    "promotion.json": "8c929cef217dd2b2c8963599ffbd1515961dc91871d445e038ac5f82376d3214",
+    "production-bases/result.json": "38c3ccbccb024510e58867b349751beaecc8277a01122fad2fef65d6a4680269",
+    "production-bases/public-validation.json": "a99e12da7141b9bb177f27e5e2c302f94ca9d3c8f47cedadcdd5def5d1db0229"
+  },
+  "infrastructure_notes": [
+    "Initial L3 harness missed an in-memory CONTRACT descriptor; no generation occurred before that error. Canonical prompt and grader stayed unchanged.",
+    "Private base checks passed; the first public harness sent native fields/alias and received400. The corrected test uses actual client-format payloads; both public calls passed. No production public validator was widened."
+  ],
+  "limits": [
+    "Configured131072-token capacity; not a full131K stress or quality test.",
+    "One canonical L3 attempt, separate from fixed512-token speed fixture; no statistical quality/performance claim.",
+    "Private request times exclude prefix preparation when listed as request_seconds; public FIFO request time includes any load/restore overhead.",
+    "Synthetic sleep GPU/RAM numbers belong to that fixture; real-client sleep payload reported separately.",
+    "New binary/library identity requires recreating compatible SSD bases; ordinary RAM conversations do not survive process restart.",
+    "No new streaming TTFT measurement in this refresh; complete request wall time is not TTFT.",
+    "Earlier grid strict numerical differences remain documented; no universal bitwise parity claim."
+  ]
+}

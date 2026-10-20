@@ -1,0 +1,1383 @@
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index f6ff9f893aee636a8def417d4c54f23e4fc4d38f..4e93dd5e7a2c749919a572989040eeb6c4a7e808 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -1334,8 +1334,10 @@ static void ggml_backend_cuda_host_buffer_free_buffer(ggml_backend_buffer_t buff
+     CUDA_CHECK(cudaFreeHost(buffer->context));
+ }
+ 
+-static void * ggml_cuda_host_malloc(size_t size) {
+-    if (ggml_cuda_pinned_memory_disabled()) {
++static void * ggml_cuda_host_malloc(size_t size, bool immutable_vision_weights = false) {
++    // Ordinary host/model buffers honor NO_PINNED. Explicit immutable Host_W vision
++    // weights retain their opt-in pinned allocation and strict CUDA staging path.
++    if (!immutable_vision_weights && ggml_cuda_pinned_memory_disabled()) {
+         return nullptr;
+     }
+ 
+@@ -1392,6 +1394,64 @@ ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type() {
+     return &ggml_backend_cuda_buffer_type_host;
+ }
+ 
++
++// ORNITH_PRIVATE_PINNED_VISION_V2_070: immutable weights, never general host inputs.
++static const char * ggml_backend_cuda_host_weights_name(ggml_backend_buffer_type_t buft) {
++    auto * ctx = (ggml_backend_cuda_buffer_type_context *) buft->context;
++    return ctx->name.c_str();
++}
++
++static bool ggml_backend_buft_is_cuda_host_weights(ggml_backend_buffer_type_t buft, ggml_backend_dev_t dev) {
++    return buft != nullptr && buft->iface.get_name == ggml_backend_cuda_host_weights_name && buft->device == dev;
++}
++
++static ggml_backend_buffer_t ggml_backend_cuda_host_weights_alloc(ggml_backend_buffer_type_t buft, size_t size) {
++    auto * ctx = (ggml_backend_cuda_buffer_type_context *) buft->context;
++    ggml_cuda_set_device(ctx->device);
++    void * ptr = ggml_cuda_host_malloc(size, true);
++    if (ptr == nullptr) {
++        return nullptr; // caller falls back to VRAM; never disguise pageable CPU RAM.
++    }
++    ggml_backend_buffer_t buffer = ggml_backend_cpu_buffer_from_ptr(ptr, size);
++    if (buffer == nullptr) {
++        CUDA_CHECK(cudaFreeHost(ptr));
++        return nullptr;
++    }
++    buffer->buft = buft;
++    buffer->iface.free_buffer = ggml_backend_cuda_host_buffer_free_buffer;
++    return buffer;
++}
++
++static ggml_backend_buffer_type_t ggml_backend_cuda_get_host_weights_buffer_type(ggml_backend_dev_t dev) {
++    static std::mutex mutex;
++    static std::map<int, ggml_backend_cuda_buffer_type_context> contexts;
++    static std::map<int, ggml_backend_buffer_type> types;
++    std::lock_guard<std::mutex> lock(mutex);
++    ggml_backend_reg_t reg = ggml_backend_cuda_reg();
++    for (size_t i = 0; i < ggml_backend_reg_dev_count(reg); ++i) {
++        if (ggml_backend_reg_dev_get(reg, i) != dev) {
++            continue;
++        }
++        const int device = (int) i;
++        auto found = types.find(device);
++        if (found != types.end()) {
++            return &found->second;
++        }
++        auto & ctx = contexts[device];
++        ctx.device = device;
++        ctx.name = std::string(GGML_CUDA_NAME) + std::to_string(device) + "_Host_W";
++        ggml_backend_buffer_type type = {};
++        type.iface.get_name = ggml_backend_cuda_host_weights_name;
++        type.iface.alloc_buffer = ggml_backend_cuda_host_weights_alloc;
++        type.iface.get_alignment = ggml_backend_cuda_buffer_type_get_alignment;
++        type.iface.is_host = ggml_backend_cpu_buffer_type()->iface.is_host;
++        type.device = dev;
++        type.context = &ctx;
++        return &types.emplace(device, type).first->second;
++    }
++    return nullptr;
++}
++
+ //static bool ggml_backend_buffer_is_cuda_host(ggml_backend_buffer_t buffer) {
+ //    return buffer->buft->iface.get_name == ggml_backend_cuda_host_buffer_type_name;
+ //}
+@@ -4730,6 +4790,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
+                     if (node->src[j] != nullptr) {
+                         assert(node->src[j]->buffer);
+                         assert(node->src[j]->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) ||
++                               ggml_backend_buft_is_cuda_host_weights(node->src[j]->buffer->buft, ggml_backend_reg_dev_get(ggml_backend_cuda_reg(), cuda_ctx->device)) ||
+                                (integrated && ggml_backend_buft_is_cuda_host(node->src[j]->buffer->buft)));
+                     }
+                 }
+@@ -4803,11 +4864,119 @@ static bool ggml_cuda_graph_set_enabled(ggml_backend_cuda_context * cuda_ctx, co
+ }
+ #endif // USE_CUDA_GRAPH
+ 
++
++// Graph-local conservative staging. Original tensor metadata/pointers are immutable.
++static bool ggml_cuda_graph_has_host_weights(ggml_cgraph * graph) {
++    for (int i = 0; i < graph->n_nodes; ++i) {
++        const ggml_tensor * node = graph->nodes[i];
++        if (node->buffer && node->buffer->buft->iface.get_name == ggml_backend_cuda_host_weights_name) {
++            return true;
++        }
++        for (int j = 0; j < GGML_MAX_SRC; ++j) {
++            const ggml_tensor * src = node->src[j];
++            if (src && src->buffer && src->buffer->buft->iface.get_name == ggml_backend_cuda_host_weights_name) {
++                return true;
++            }
++        }
++    }
++    return false;
++}
++
++struct ggml_cuda_host_weight_staging {
++    std::array<ggml_backend_buffer_t, GGML_MAX_SRC> buffers = {};
++    ~ggml_cuda_host_weight_staging() {
++        // Kernels can use internal streams: stream-only synchronization is insufficient.
++        CUDA_CHECK(cudaDeviceSynchronize());
++        for (auto buffer : buffers) {
++            if (buffer) {
++                ggml_backend_buffer_free(buffer);
++            }
++        }
++    }
++};
++
++static enum ggml_status ggml_cuda_compute_host_weights_strict(ggml_backend_t backend, ggml_cgraph * graph) {
++    auto * ctx = (ggml_backend_cuda_context *) backend->context;
++    const auto dev = ggml_backend_get_device(backend);
++    const auto cuda_buft = ggml_backend_cuda_buffer_type(ctx->device);
++    CUDA_CHECK(cudaDeviceSynchronize());
++    for (int i = 0; i < graph->n_nodes; ++i) {
++        const ggml_tensor * original = graph->nodes[i];
++        if (ggml_cuda_is_view_or_noop(original) || (original->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
++            continue;
++        }
++        if (!original->buffer || original->buffer->buft != cuda_buft) {
++            GGML_LOG_ERROR("%s: destination must be device-local CUDA memory\n", __func__);
++            return GGML_STATUS_FAILED;
++        }
++        ggml_tensor node = *original;
++        std::array<ggml_tensor, GGML_MAX_SRC> sources;
++        ggml_cuda_host_weight_staging owned; // destroyed before local tensor metadata
++        for (int j = 0; j < GGML_MAX_SRC; ++j) {
++            const ggml_tensor * src = original->src[j];
++            if (!src) {
++                continue;
++            }
++            if (!src->buffer) {
++                return GGML_STATUS_FAILED;
++            }
++            if (src->buffer->buft == cuda_buft) {
++                continue;
++            }
++            if (!ggml_backend_buft_is_cuda_host_weights(src->buffer->buft, dev) ||
++                ggml_backend_buffer_get_usage(src->buffer) != GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
++                GGML_LOG_ERROR("%s: non-device source is not this device's immutable Host_W\n", __func__);
++                return GGML_STATUS_FAILED;
++            }
++            if (original->op == GGML_OP_CPY && j == 1) {
++                GGML_LOG_ERROR("%s: refusing write into immutable Host_W\n", __func__);
++                return GGML_STATUS_FAILED;
++            }
++            // Views retain their full byte span and strides; reject any escaped range.
++            const uintptr_t base = (uintptr_t) ggml_backend_buffer_get_base(src->buffer);
++            const uintptr_t data = (uintptr_t) src->data;
++            const size_t span = ggml_nbytes(src);
++            const size_t capacity = ggml_backend_buffer_get_size(src->buffer);
++            if (data < base || data - base > capacity || span > capacity - (data - base)) {
++                return GGML_STATUS_FAILED;
++            }
++            sources[j] = *src;
++            sources[j].view_src = nullptr;
++            sources[j].view_offs = 0;
++            sources[j].extra = nullptr;
++            const size_t allocation = ggml_backend_buft_get_alloc_size(cuda_buft, &sources[j]);
++            owned.buffers[j] = ggml_backend_buft_alloc_buffer(cuda_buft, allocation);
++            if (!owned.buffers[j]) {
++                return GGML_STATUS_ALLOC_FAILED;
++            }
++            ggml_backend_buffer_set_usage(owned.buffers[j], GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
++            sources[j].buffer = owned.buffers[j];
++            sources[j].data = ggml_backend_buffer_get_base(owned.buffers[j]);
++            if (ggml_backend_buffer_init_tensor(owned.buffers[j], &sources[j]) != GGML_STATUS_SUCCESS) {
++                return GGML_STATUS_FAILED;
++            }
++            // Synchronous transfer also orders initialization/padding before kernels.
++            CUDA_CHECK(cudaMemcpy(sources[j].data, src->data, span, cudaMemcpyHostToDevice));
++            node.src[j] = &sources[j];
++        }
++        if (!ggml_cuda_compute_forward(*ctx, &node)) {
++            GGML_LOG_ERROR("%s: unsupported CUDA op %s (%s); no CPU fallback\n", __func__, original->name, ggml_op_name(original->op));
++            return GGML_STATUS_FAILED;
++        }
++        // 'owned' synchronizes all streams before freeing GPU buffers and local metadata.
++    }
++    return GGML_STATUS_SUCCESS;
++}
++
+ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
+     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
+ 
+     ggml_cuda_set_device(cuda_ctx->device);
+ 
++    if (ggml_cuda_graph_has_host_weights(cgraph)) {
++        return ggml_cuda_compute_host_weights_strict(backend, cgraph);
++    }
++
+     bool use_cuda_graph             = false;
+     bool cuda_graph_update_required = false;
+     const void * graph_key = nullptr;
+@@ -4893,6 +5062,10 @@ static void ggml_backend_cuda_event_wait(ggml_backend_t backend, ggml_backend_ev
+ 
+ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph * cgraph, ggml_backend_graph_optimize_params * params) {
+     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
++    if (ggml_cuda_graph_has_host_weights(cgraph)) {
++        cuda_ctx->stream_context().reset();
++        return; // no node reordering or concurrent-stream plan for strict staging
++    }
+ 
+     const bool disable_fusion = ggml_cuda_fusion_disabled();
+ 
+@@ -5320,6 +5493,11 @@ bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size) {
+ 
+ #if CUDART_VERSION >= 11010 || defined(GGML_USE_MUSA) || defined(GGML_USE_HIP)
+     cudaError_t err = cudaHostRegister(buffer, size, cudaHostRegisterPortable | cudaHostRegisterReadOnly);
++    if (err == cudaErrorNotSupported) {
++        // A520 proven compatibility fix: retry without ReadOnly on driver rejection.
++        (void)cudaGetLastError();
++        err = cudaHostRegister(buffer, size, cudaHostRegisterPortable);
++    }
+     if (err != cudaSuccess) {
+         // clear the error
+         (void)cudaGetLastError();
+@@ -5543,6 +5721,11 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
+ 
+     // check if all the sources are allocated on this device
+     for (int i = 0; i < GGML_MAX_SRC; i++) {
++        if (op->src[i] && op->src[i]->buffer &&
++            op->src[i]->buffer->buft->iface.get_name == ggml_backend_cuda_host_weights_name &&
++            !ggml_backend_buft_is_cuda_host_weights(op->src[i]->buffer->buft, dev)) {
++            return false;
++        }
+         if (op->src[i] && op->src[i]->buffer && ggml_backend_buft_is_cuda(op->src[i]->buffer->buft)) {
+             ggml_backend_cuda_buffer_type_context * buft_ctx = (ggml_backend_cuda_buffer_type_context *)op->src[i]->buffer->buft->context;
+             if (buft_ctx->device != dev_ctx->device) {
+@@ -6012,7 +6195,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
+ static bool ggml_backend_cuda_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
+     ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) dev->context;
+     const bool integrated = ggml_cuda_info().devices[dev_ctx->device].integrated;
+-    return (ggml_backend_buft_is_cuda(buft) && buft->device == dev) || (integrated && ggml_backend_buft_is_cuda_host(buft));
++    return (ggml_backend_buft_is_cuda(buft) && buft->device == dev) ||
++           ggml_backend_buft_is_cuda_host_weights(buft, dev) ||
++           (integrated && ggml_backend_buft_is_cuda_host(buft));
+ }
+ 
+ static int64_t get_op_batch_size(const ggml_tensor * op) {
+@@ -6175,6 +6360,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+     if (strcmp(name, "ggml_backend_comm_allreduce_tensor") == 0) {
+         return (void *)ggml_backend_cuda_comm_allreduce_tensor;
+     }
++    if (strcmp(name, "ggml_backend_cuda_get_host_weights_buffer_type") == 0) {
++        return (void *) ggml_backend_cuda_get_host_weights_buffer_type;
++    }
+     if (strcmp(name, "ggml_backend_register_host_buffer") == 0) {
+         return (void *)ggml_backend_cuda_register_host_buffer;
+     }
+diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
+index 4d3596b244cb46e429b7bda8f7369c528c02dd1c..34bf4c0285d9e984fdcbe63aea8daa9393a4cc02 100644
+--- a/src/llama-moe-cache.cpp
++++ b/src/llama-moe-cache.cpp
+@@ -6,10 +6,21 @@
+ #include "ggml-cpp.h"
+ 
+ #include <algorithm>
++#include <cstdint>
++#include <cstdlib>
+ #include <stdexcept>
+ #include <unordered_map>
+ #include <vector>
+ 
++#if defined(_WIN32)
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#include <windows.h>
++#else
++#include <unistd.h>
++#endif
++
+ namespace {
+ 
+ // SLRU of the experts of a group of layers, the slot of each expert is kept in the slot map of its layer
+@@ -227,6 +238,14 @@ struct llama_moe_cache::impl {
+         size_t bytes  = 0;
+     };
+ 
++    using register_host_fn = bool (*)(void *, size_t);
++    using unregister_host_fn = void (*)(void *);
++
++    struct host_registration {
++        void * base;
++        unregister_host_fn unregister;
++    };
++
+     static constexpr int64_t max_batch = 32;
+ 
+     int32_t n_expert_used;
+@@ -243,6 +262,7 @@ struct llama_moe_cache::impl {
+ 
+     std::vector<int32_t> ids;
+     std::vector<moe_cache_slru::fill> fills;
++    std::vector<host_registration> host_registrations;
+ 
+     // slot maps in host memory
+     ggml_context_ptr ctx_host;
+@@ -483,6 +503,87 @@ struct llama_moe_cache::impl {
+                 }
+             }
+         }
++
++        if (!model.hparams.no_alloc && getenv("GGML_CUDA_REGISTER_HOST") != nullptr) {
++            struct host_range {
++                uintptr_t begin;
++                uintptr_t end;
++            };
++
++            size_t page_size = 0;
++#if defined(_WIN32)
++            SYSTEM_INFO system_info;
++            GetSystemInfo(&system_info);
++            page_size = system_info.dwPageSize;
++#else
++            const long system_page_size = sysconf(_SC_PAGESIZE);
++            page_size = system_page_size > 0 ? (size_t) system_page_size : 0;
++#endif
++
++            std::vector<host_range> ranges;
++            register_host_fn register_host = nullptr;
++            unregister_host_fn unregister_host = nullptr;
++            size_t registered_bytes = 0;
++            for (const group & g : groups) {
++                if (g.n_slots == 0) {
++                    continue;
++                }
++                ggml_backend_dev_t dev = ggml_backend_get_device(devices[g.id].backend);
++                ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
++                if (register_host == nullptr) {
++                    register_host = reg ? (register_host_fn) ggml_backend_reg_get_proc_address(reg, "ggml_backend_register_host_buffer") : nullptr;
++                    unregister_host = reg ? (unregister_host_fn) ggml_backend_reg_get_proc_address(reg, "ggml_backend_unregister_host_buffer") : nullptr;
++                }
++                for (int32_t il : g.layers) {
++                    for (const ggml_tensor * t : layers[il].experts) {
++                        if (t->data == nullptr || page_size == 0) {
++                            continue;
++                        }
++                        const uintptr_t raw_begin = (uintptr_t) t->data;
++                        const uintptr_t raw_end = raw_begin + ggml_nbytes(t);
++                        if (raw_end <= raw_begin) {
++                            continue;
++                        }
++                        ranges.push_back({
++                            raw_begin - raw_begin % page_size,
++                            raw_end + (page_size - raw_end % page_size) % page_size,
++                        });
++                    }
++                }
++            }
++
++            std::sort(ranges.begin(), ranges.end(), [](const host_range & a, const host_range & b) {
++                return a.begin < b.begin || (a.begin == b.begin && a.end < b.end);
++            });
++            std::vector<host_range> merged;
++            for (const host_range & range : ranges) {
++                if (merged.empty() || range.begin > merged.back().end) {
++                    merged.push_back(range);
++                } else {
++                    merged.back().end = std::max(merged.back().end, range.end);
++                }
++            }
++
++            if (page_size == 0) {
++                LLAMA_LOG_WARN("%s: could not determine host page size; expert registration is disabled\n", __func__);
++            } else if (register_host == nullptr || unregister_host == nullptr) {
++                LLAMA_LOG_WARN("%s: CUDA host registration is unavailable; expert transfers will use pageable memory\n", __func__);
++            } else {
++                for (const host_range & range : merged) {
++                    void * base = (void *) range.begin;
++                    const size_t size = range.end - range.begin;
++                    if (register_host(base, size)) {
++                        host_registrations.push_back({ base, unregister_host });
++                        registered_bytes += size;
++                    } else {
++                        LLAMA_LOG_WARN("%s: failed to register %.2f MiB of host expert weights; transfers will use pageable memory\n", __func__, size/1024.0/1024.0);
++                    }
++                }
++            }
++            if (registered_bytes > 0) {
++                LLAMA_LOG_INFO("%s: registered %.2f MiB of host expert-weight pages for direct DMA\n", __func__, registered_bytes/1024.0/1024.0);
++            }
++        }
+     }
+ 
+     ggml_backend_t backend(int32_t il) const {
+@@ -490,6 +591,9 @@ struct llama_moe_cache::impl {
+     }
+ 
+     ~impl() {
++        for (const host_registration & registration : host_registrations) {
++            registration.unregister(registration.base);
++        }
+         log_stats();
+     }
+ 
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 991bf547998d8a2a553329e4d44499126c9413c2..dd1a9d22b52ae1bf683a42f7e8836921a22e858b 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -191,6 +191,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+     target_include_directories(test-chat PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
+     target_link_libraries(test-chat PRIVATE server-context)
+     llama_build_and_test(test-server-component.cpp)
++    llama_build_and_test(test-server-prefix-selection.cpp)
+     target_include_directories(test-server-component PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
+     target_link_libraries(test-server-component PRIVATE server-context)
+     llama_build_and_test(test-json-schema-to-grammar.cpp)
+diff --git a/tests/test-server-component.cpp b/tests/test-server-component.cpp
+index aa353e190ba4e7606e72344ffba7e2e1536924aa..89d935e6cab77138b5f9fe55adf74dc18aa7b9df 100644
+--- a/tests/test-server-component.cpp
++++ b/tests/test-server-component.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include "../tools/server/server-common.h"
+ #include "../tools/server/server-decision.h"
++#include "../tools/server/server-task.h"
+ 
+ #include <cstdlib>
+ #include <regex>
+@@ -435,6 +436,58 @@ static void test_decision_escape(testing & t) {
+     });
+ }
+ 
++static void test_checkpoint_grid(testing & t) {
++    t.assert_equal("small prompt", (uint8_t) 0, server_checkpoint_grid_anchor(512, 1024, 512));
++    t.assert_equal("before first anchor", (uint8_t) 0, server_checkpoint_grid_anchor(4095, 12288, 512));
++    t.assert_equal("first natural boundary", (uint8_t) 1, server_checkpoint_grid_anchor(4096, 12288, 512));
++    t.assert_equal("unaligned natural boundary", (uint8_t) 1, server_checkpoint_grid_anchor(4200, 12288, 512));
++    t.assert_equal("past first window", (uint8_t) 0, server_checkpoint_grid_anchor(4608, 12288, 512));
++    t.assert_equal("second anchor", (uint8_t) 2, server_checkpoint_grid_anchor(8192, 12288, 512));
++    t.assert_equal("zero batch", (uint8_t) 0, server_checkpoint_grid_anchor(8192, 12288, 0));
++    t.assert_equal("retain two anchors and newest two", (size_t) 2,
++            server_checkpoint_grid_evict({4096, 8192, 11000, 12000, 12100}, 12288));
++    t.assert_equal("discard stale early state", (size_t) 0,
++            server_checkpoint_grid_evict({1024, 4096, 8192, 12000, 12100}, 12288));
++    std::vector<int64_t> positions = {4096, 8192, 12000, 12100};
++    for (int64_t tail = 12110; tail < 12200; tail += 10) {
++        positions.push_back(tail);
++        positions.erase(positions.begin() + server_checkpoint_grid_evict(positions, 12288));
++        t.assert_equal("first interior anchor survives appended turns", (int64_t) 4096, positions[0]);
++        t.assert_equal("second interior anchor survives appended turns", (int64_t) 8192, positions[1]);
++        t.assert_equal("newest state retained", tail, positions.back());
++    }
++}
++
++static void test_prefix_cache_preservation(testing & t) {
++    server_prompt_cache cache(1, 100000);
++    server_prompt longer{server_tokens(llama_tokens{1, 2, 3, 4, 5, 6}, false), {}};
++    server_prompt active{server_tokens(llama_tokens{1, 2, 3, 4}, false), {}};
++    t.assert_true("allocate larger conversation", cache.alloc(longer, 128, 0) != nullptr);
++    t.assert_true("legacy skips contained prompt", cache.alloc(active, 128, 0) == nullptr);
++    t.assert_true("opt-in preserves exact active point", cache.alloc(active, 128, 0, true) != nullptr);
++    t.assert_true("exact entry prevents duplicate", cache.alloc(active, 128, 0, true) == nullptr);
++
++    server_prompt_cache bounded(1, 100000);
++    server_prompt old{server_tokens(llama_tokens{8, 9}, false), {}};
++    server_prompt replacement{server_tokens(llama_tokens{11, 12}, false), {}};
++    t.assert_true("old state allocated", bounded.alloc(old, 200000, 0) != nullptr);
++    t.assert_true("reserved selected RAM candidate respected",
++        bounded.alloc(replacement, 500000, 0, true, 600000) == nullptr);
++    t.assert_equal("failed preservation keeps old RAM", size_t(1), bounded.states.size());
++    t.assert_true("reservation evicts other LRU before copying active",
++        bounded.alloc(replacement, 500000, 0, true, 400000) != nullptr);
++    t.assert_true("resident plus reserved stays bounded", bounded.size() + 400000 <= bounded.limit_size);
++
++    server_task_result_slot_save_load response;
++    response.id_slot = 0; response.filename = "base.bin"; response.is_save = false;
++    response.n_tokens = 123; response.n_bytes = 0; response.t_ms = 0;
++    t.assert_true("legacy response unchanged", !response.to_json().contains("restore_source"));
++    response.restore_source = "active"; response.n_reusable = 100;
++    response.preserve_failed = true; response.restore_reason = "active_preservation_unavailable";
++    t.assert_true("controlled preservation failure", response.to_json().at("preserve_failed").get<bool>());
++    t.assert_equal("active reused count", size_t(100), response.to_json().at("n_reusable").get<size_t>());
++}
++
+ int main(int argc, char ** argv) {
+     testing t;
+ 
+@@ -454,6 +507,8 @@ int main(int argc, char ** argv) {
+     t.test("lora_helpers",  test_lora_helpers);
+     t.test("server_pipe",   test_server_pipe);
+     t.test("decision_escape", test_decision_escape);
++    t.test("checkpoint_grid", test_checkpoint_grid);
++    t.test("prefix_cache_preservation", test_prefix_cache_preservation);
+ 
+     return t.summary();
+ }
+diff --git a/tools/mtmd/clip.cpp b/tools/mtmd/clip.cpp
+index 3a4dd682ab0058aa0d6fe33b0503266080279b5f..c97b84470b91192dbdf9d16e9f8b97f87be10eb4 100644
+--- a/tools/mtmd/clip.cpp
++++ b/tools/mtmd/clip.cpp
+@@ -3846,7 +3846,42 @@ struct clip_model_loader {
+ 
+             // alloc memory and offload data
+             ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
+-            ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
++            const char * host_weights_opt = std::getenv("ORNITH_MMPROJ_HOST_WEIGHTS");
++            if (host_weights_opt && std::strcmp(host_weights_opt, "1") == 0) {
++                if (ctx_clip.backend == ctx_clip.backend_cpu) {
++                    throw std::runtime_error("ORNITH_MMPROJ_HOST_WEIGHTS=1 requires a CUDA backend; CPU compute is forbidden");
++                }
++                auto dev = ggml_backend_get_device(ctx_clip.backend);
++                auto reg = ggml_backend_dev_backend_reg(dev);
++                using get_host_weights_fn = ggml_backend_buffer_type_t (*)(ggml_backend_dev_t);
++                auto get_host_weights = (get_host_weights_fn) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_get_host_weights_buffer_type");
++                if (!get_host_weights) {
++                    throw std::runtime_error("ORNITH_MMPROJ_HOST_WEIGHTS=1 requires the patched CUDA registry; refusing CPU or other backend");
++                }
++                if (get_host_weights) {
++                    auto host_buft = get_host_weights(dev);
++                    if (!host_buft) {
++                        throw std::runtime_error("selected device has no CUDA Host_W type");
++                    }
++                    if (host_buft) {
++                        ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), host_buft));
++                        if (ctx_clip.buf) {
++                            buft = host_buft;
++                            LOG_INF("%s: ORNITH_PRIVATE_PINNED_VISION_V2_070 pinned allocation confirmed: %s, %.2f MiB; GPU strict staging\n", __func__,
++                                    ggml_backend_buft_name(buft), ggml_backend_buffer_get_size(ctx_clip.buf.get()) / 1024.0 / 1024.0);
++                        }
++                    }
++                }
++                if (!ctx_clip.buf) {
++                    LOG_WRN("%s: pinned weights unavailable; fallback to default device memory (not a pinned trial)\n", __func__);
++                }
++            }
++            if (!ctx_clip.buf) {
++                ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
++            }
++            if (!ctx_clip.buf) {
++                throw std::runtime_error("failed to allocate projector weights");
++            }
+             ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+             // read the weight from file
+             if (!ctx_clip.no_alloc) {
+@@ -4010,7 +4045,21 @@ struct clip_model_loader {
+     // only initialize backend buffers, but do not allocate them yet
+     static support_info_graph reserve_compute_meta(clip_ctx & ctx_clip, const clip_image_f32_batch & batch) {
+         ggml_cgraph * gf = clip_get_graph_builder(&ctx_clip, batch)->build();
+-        ggml_backend_sched_reserve(ctx_clip.sched.get(), gf);
++        const char * host_weights_opt = std::getenv("ORNITH_MMPROJ_HOST_WEIGHTS");
++        if (host_weights_opt && std::strcmp(host_weights_opt, "1") == 0) {
++            for (int i = 0; i < ggml_graph_n_nodes(gf); ++i) {
++                ggml_tensor * node = ggml_graph_node(gf, i);
++                if (ggml_backend_supports_op(ctx_clip.backend, node)) {
++                    ggml_backend_sched_set_tensor_backend(ctx_clip.sched.get(), node, ctx_clip.backend);
++                }
++                // Unsupported nodes remain visible to existing AUTO flash-attn
++                // negotiation. Reserve executes nothing; encode rejects any
++                // unsupported nodes remaining after that negotiation.
++            }
++        }
++        if (!ggml_backend_sched_reserve(ctx_clip.sched.get(), gf)) {
++            throw std::runtime_error("failed to reserve GPU encoder graph");
++        }
+ 
+         ctx_clip.mem_compute.clear();
+         for (size_t i = 0; i < ctx_clip.backend_ptrs.size(); ++i) {
+@@ -4751,6 +4800,7 @@ void clip_enc_state_free(clip_enc_state * state) {
+ }
+ 
+ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
++    const int64_t bench_start_us = ggml_time_us();
+     const clip_image_f32_batch & imgs = *params->imgs;
+     int n_batch_cur = imgs.entries.size();
+ 
+@@ -4773,8 +4823,20 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
+     // build the inference graph
+     ggml_backend_sched_reset(ctx->sched.get());
+     ggml_cgraph * gf = clip_get_graph_builder(ctx, imgs, params)->build();
++    const char * host_weights_opt = std::getenv("ORNITH_MMPROJ_HOST_WEIGHTS");
++    if (host_weights_opt && std::strcmp(host_weights_opt, "1") == 0) {
++        // Explicitly pin compute placement, including operations without weight sources.
++        for (int i = 0; i < ggml_graph_n_nodes(gf); ++i) {
++            ggml_tensor * node = ggml_graph_node(gf, i);
++            if (!ggml_backend_supports_op(ctx->backend, node)) {
++                LOG_ERR("%s: pinned vision requires GPU support for %s; refusing CPU fallback\n", __func__, ggml_op_name(node->op));
++                return false;
++            }
++            ggml_backend_sched_set_tensor_backend(ctx->sched.get(), node, ctx->backend);
++        }
++    }
+     if (!ggml_backend_sched_alloc_graph(ctx->sched.get(), gf)) {
+-        LOG_ERR("%s: failed to allocate compute graph\n", __func__);
++        LOG_ERR("%s: failed to allocate encoder graph; refusing to set inputs or execute\n", __func__);
+         return false;
+     }
+ 
+@@ -6183,6 +6245,12 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
+         }
+     }
+ 
++    const char * bench_timing = std::getenv("ORNITH_BENCH_ENCODER_TIMING");
++    if (bench_timing && std::strcmp(bench_timing, "1") == 0 && embeddings != nullptr) {
++        LOG_INF("%s: vision encoder_time = %.3f ms; visual_tokens = %lld\n", __func__,
++                (ggml_time_us() - bench_start_us) / 1000.0, (long long) embeddings->ne[1]);
++    }
++
+     //
+     // for audio gen models
+     //
+diff --git a/tools/server/server-common.h b/tools/server/server-common.h
+index 2777521221ae4c5ee2d8ce862763bed52293b5fc..109601894493e08f83bb30368ff0ccc39da8bfb3 100644
+--- a/tools/server/server-common.h
++++ b/tools/server/server-common.h
+@@ -40,6 +40,44 @@ using json = common_json;
+ 
+ using raw_buffer = std::vector<uint8_t>;
+ 
++// Keep two interior anchors and the two newest states in a four-checkpoint pool.
++static size_t server_checkpoint_grid_evict(const std::vector<int64_t> & positions, int64_t n_tokens) {
++    GGML_ASSERT(positions.size() == 5 && n_tokens > 0);
++    size_t evict = 0;
++    int64_t best_cost = INT64_MAX;
++    for (size_t drop = 0; drop < 3; ++drop) {
++        int64_t cost = 0;
++        int64_t target = n_tokens / 3;
++        for (size_t i = 0; i < 3; ++i) {
++            if (i == drop) {
++                continue;
++            }
++            const int64_t delta = positions[i] - target;
++            cost += delta < 0 ? -delta : delta;
++            target = 2 * n_tokens / 3;
++        }
++        if (cost < best_cost) {
++            best_cost = cost;
++            evict = drop;
++        }
++    }
++    return evict;
++}
++
++static uint8_t server_checkpoint_grid_anchor(int64_t start, int64_t n_tokens, int64_t n_batch) {
++    if (n_batch <= 0 || n_tokens < 3 * n_batch || start <= 0) {
++        return 0;
++    }
++    uint8_t anchors = 0;
++    for (int i = 1; i <= 2; ++i) {
++        const int64_t target = i * n_tokens / 3;
++        if (start >= target && start - target < n_batch) {
++            anchors |= 1 << (i - 1);
++        }
++    }
++    return anchors;
++}
++
+ template <typename T>
+ static T json_value(const json & body, const std::string & key, const T & default_value) {
+     // Fallback null to default value
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index b2116b1740a39be2412a33caf52adb9e322e95ee..80dff3b77ad2d94e1def20c9c843dedaa3d11379 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -7,6 +7,7 @@
+ #include "server-queue.h"
+ #include "server-schema.h"
+ #include "server-stream.h"
++#include "server-prefix-selection.h"
+ 
+ #include "build-info.h"
+ #include "common.h"
+@@ -304,8 +305,11 @@ struct server_slot {
+     slot_state state = SLOT_STATE_IDLE;
+ 
+     server_prompt prompt;
++    bool checkpoint_grid = false;
++    uint8_t checkpoint_grid_seen = 0;
++    int64_t checkpoint_ordinary_last = -1;
+ 
+-    bool prompt_save(server_prompt_cache & prompt_cache) const {
++    bool prompt_save(server_prompt_cache & prompt_cache, bool exact = false, size_t reserved_size = 0) const {
+         if (prompt.tokens.size() == 0) {
+             return false;
+         }
+@@ -318,15 +322,27 @@ struct server_slot {
+         SRV_TRC(" - saving prompt with length %d, total state size = %.3f MiB (draft: %.3f MiB)\n",
+                 (int) prompt.tokens.size(), cur_size / (1024.0 * 1024.0), cur_size_dft / (1024.0 * 1024.0));
+ 
+-        auto * cur = prompt_cache.alloc(prompt, cur_size_tgt, cur_size_dft);
++        auto * cur = prompt_cache.alloc(prompt, cur_size_tgt, cur_size_dft, exact, reserved_size);
+         if (cur == nullptr) {
+             return false;
+         }
+ 
+-        llama_state_seq_get_data_ext(ctx_tgt, cur->data.main.data(), cur_size_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
++        const size_t written_tgt = llama_state_seq_get_data_ext(ctx_tgt, cur->data.main.data(), cur_size_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
++        size_t written_dft = cur_size_dft;
+         if (ctx_dft) {
+-            llama_state_seq_get_data_ext(ctx_dft, cur->data.drft.data(), cur_size_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE);
++            written_dft = llama_state_seq_get_data_ext(ctx_dft, cur->data.drft.data(), cur_size_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE);
+         }
++        if (exact && (written_tgt != cur_size_tgt || written_dft != cur_size_dft)) {
++            for (auto it = prompt_cache.states.begin(); it != prompt_cache.states.end(); ++it) {
++                if (&*it == cur) {
++                    prompt_cache.states.erase(it);
++                    break;
++                }
++            }
++            return false;
++        }
++        cur->pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), id);
++        cur->pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), id);
+ 
+         return true;
+     }
+@@ -1023,6 +1039,37 @@ private:
+     int n_empty_consecutive = 0;
+ 
+     std::unique_ptr<server_prompt_cache> prompt_cache;
++    std::string prompt_cache_identity;
++    bool checkpoint_grid = false;
++
++    std::string get_prompt_cache_identity() const {
++        // Resume uses the same parameters; file replacement still invalidates states.
++        if (params_base.speculative.has_dft() || !params_base.lora_adapters.empty() ||
++                std::any_of(params_base.speculative.types.begin(), params_base.speculative.types.end(),
++                    [](auto type) { return type != COMMON_SPECULATIVE_TYPE_NONE; })) {
++            return {};
++        }
++        json files = json::array();
++        for (const auto & path : { params_base.model.path, params_base.mmproj.path }) {
++            if (path.empty()) {
++                continue;
++            }
++            std::error_code ec;
++            const auto size = std::filesystem::file_size(path, ec);
++            if (ec) {
++                return {};
++            }
++            const auto modified = std::filesystem::last_write_time(path, ec);
++            if (ec) {
++                return {};
++            }
++            files.push_back({ { "path", path }, { "size", size }, { "modified", modified.time_since_epoch().count() } });
++        }
++        return json({ { "files", files }, { "n_ctx", n_ctx },
++                { "cache_k", params_base.cache_type_k }, { "cache_v", params_base.cache_type_v },
++                { "rope_base", params_base.rope_freq_base }, { "rope_scale", params_base.rope_freq_scale },
++                { "checkpoint_grid", checkpoint_grid }, { "checkpoints", params_base.n_ctx_checkpoints } }).dump();
++    }
+ 
+     server_metrics metrics;
+ 
+@@ -1069,6 +1116,21 @@ private:
+                 // note: for sleeping == false, event is emitted by load_model()
+             }
+             SRV_INF("%s", "server is entering sleeping state\n");
++            if (prompt_cache && !prompt_cache_identity.empty() && prompt_cache_identity == get_prompt_cache_identity()) {
++                for (const auto & slot : slots) {
++                    GGML_ASSERT(!slot.is_processing());
++                    try {
++                        slot.prompt_save(*prompt_cache);
++                    } catch (const std::exception & err) {
++                        SRV_WRN("failed to cache slot before sleep: %s\n", err.what());
++                    }
++                }
++                prompt_cache->update();
++                SRV_INF("sleep cache: %zu states, %.3f MiB retained\n", prompt_cache->states.size(), prompt_cache->size() / (1024.0 * 1024.0));
++            } else {
++                prompt_cache.reset();
++            }
++            slots.clear();
+             destroy();
+         } else {
+             SRV_INF("%s", "server is exiting sleeping state\n");
+@@ -1380,6 +1442,14 @@ private:
+         slots.clear();
+ 
+         ctx_tgt_seq_rm_type = common_context_can_seq_rm(ctx_tgt);
++        const char * grid = getenv("ORNITH_CHECKPOINT_GRID");
++        checkpoint_grid = grid && std::string(grid) == "1" && params_base.n_parallel == 1 &&
++                params_base.n_ctx_checkpoints == 4 && n_swa == 0 && params_base.lora_adapters.empty() &&
++                std::all_of(params_base.speculative.types.begin(), params_base.speculative.types.end(),
++                    [](auto type) { return type == COMMON_SPECULATIVE_TYPE_NONE; });
++        if (checkpoint_grid) {
++            SRV_INF("%s", "checkpoint grid enabled: 4 checkpoints, natural batch boundaries\n");
++        }
+         if (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_NO) {
+             SRV_WRN("%s", "speculative decoding not supported by this context\n");
+         }
+@@ -1497,6 +1567,10 @@ private:
+             params_base.cache_idle_slots = false;
+         }
+ 
++        const std::string cache_identity = get_prompt_cache_identity();
++        if (!is_resume || cache_identity.empty() || cache_identity != prompt_cache_identity || params_base.cache_ram_mib == 0) {
++            prompt_cache.reset();
++        }
+         if (params_base.cache_ram_mib != 0) {
+             if (params_base.cache_ram_mib < 0) {
+                 SRV_TRC("prompt cache is enabled, size limit: %s\n", "no limit");
+@@ -1505,10 +1579,13 @@ private:
+             }
+             SRV_TRC("%s", "use `--cache-ram 0` to disable the prompt cache\n");
+ 
+-            prompt_cache = std::make_unique<server_prompt_cache>(params_base.cache_ram_mib, n_ctx);
++            if (!prompt_cache) {
++                prompt_cache = std::make_unique<server_prompt_cache>(params_base.cache_ram_mib, n_ctx);
++            }
+         } else {
+             SRV_TRC("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
+         }
++        prompt_cache_identity = cache_identity;
+         SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
+ 
+         if (params_base.n_ctx_checkpoints > 0) {
+@@ -1693,6 +1770,49 @@ private:
+         return nullptr;
+     }
+ 
++    size_t prefix_reusable(const server_prompt & prompt, int64_t state_pos_min,
++                           const server_tokens & target, bool require_logits) const {
++        const size_t lcp = prompt.tokens.get_common_prefix(target);
++        const auto pos_next = prompt.tokens.pos_next(lcp);
++        std::vector<server_prefix_checkpoint_view> checkpoints;
++        for (const auto & cp : prompt.checkpoints) {
++            if (cp.data_tgt.empty()) {
++                continue;
++            }
++            const auto pos = std::min<int64_t>(pos_next, std::max<int64_t>(cp.pos_min + 1, cp.pos_max));
++            const auto reusable = std::min(prompt.tokens.size_up_to_pos(pos), size_t(std::max<int64_t>(0, cp.n_tokens)));
++            checkpoints.push_back({cp.pos_min, cp.pos_max, reusable});
++        }
++        return server_prefix_reusable(lcp, target.size(), pos_next, state_pos_min, n_swa,
++                                      checkpoints, require_logits);
++    }
++
++    bool preserve_prefix_active(const server_slot & slot, size_t reserved_size = 0) {
++        if (slot.prompt.tokens.empty()) {
++            return true;
++        }
++        if (!prompt_cache) {
++            return false;
++        }
++        const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id);
++        const auto pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id);
++        for (const auto & state : prompt_cache->states) {
++            if (!state.data.main.empty() && state.pos_min >= 0 &&
++                    state.pos_min == pos_min && state.pos_max == pos_max &&
++                    state.prompt.tokens.size() == slot.prompt.tokens.size() &&
++                    state.prompt.tokens.get_common_prefix(slot.prompt.tokens) == slot.prompt.tokens.size()) {
++                return true;
++            }
++        }
++        // Exact mode must not mistake a longer cached conversation for a
++        // reusable snapshot of the active hybrid/recurrent state.
++        if (!slot.prompt_save(*prompt_cache, true, reserved_size)) {
++            return false;
++        }
++        prompt_cache->update();
++        return true;
++    }
++
+     server_slot * get_available_slot(const server_task & task) {
+         server_slot * ret = nullptr;
+ 
+@@ -2544,12 +2664,34 @@ private:
+     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
+         const int id_task = slot.task->id;
+ 
++        if (slot.checkpoint_grid) {
++            const int64_t n_tokens_new = slot.prompt.n_tokens() - n_tokens_cur;
++            for (auto it = slot.prompt.checkpoints.begin(); it != slot.prompt.checkpoints.end();) {
++                if (it->n_tokens == n_tokens_new) {
++                    it = slot.prompt.checkpoints.erase(it);
++                } else {
++                    ++it;
++                }
++            }
++            if (slot.prompt.checkpoints.size() == 4) {
++                std::vector<int64_t> positions;
++                for (const auto & checkpoint : slot.prompt.checkpoints) {
++                    GGML_ASSERT(checkpoint.n_tokens < n_tokens_new);
++                    positions.push_back(checkpoint.n_tokens);
++                }
++                positions.push_back(n_tokens_new);
++                auto it = slot.prompt.checkpoints.begin();
++                std::advance(it, server_checkpoint_grid_evict(positions, slot.task->n_tokens()));
++                slot.prompt.checkpoints.erase(it);
++            }
++        }
++
+         // evict checkpoints within min-step of a previous checkpoint, unless they were
+         // created by the current task
+         // only when the list is full, otherwise short prompts keep just the oldest checkpoint
+         int64_t last = -1;
+         for (auto it = slot.prompt.checkpoints.begin();
+-                slot.prompt.checkpoints.size() + 1 >= (size_t) params_base.n_ctx_checkpoints &&
++                !slot.checkpoint_grid && slot.prompt.checkpoints.size() + 1 >= (size_t) params_base.n_ctx_checkpoints &&
+                 it != slot.prompt.checkpoints.end(); ) {
+             if (it->id_task != id_task && last >= 0 && it->n_tokens <= last + params_base.checkpoint_min_step) {
+                 SLT_TRC(slot, "erasing context checkpoint too close to an earlier one (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+@@ -3072,6 +3214,133 @@ private:
+                     std::string filepath = task.slot_action.filepath;
+ 
+                     size_t nread = 0;
++                    if (task.slot_action.restore_if_better) {
++                        if (task.slot_action.preserve_active_only) {
++                            bool preserved = false;
++                            try {
++                                preserved = preserve_prefix_active(*slot);
++                            } catch (const std::exception &) {
++                                preserved = false;
++                            }
++                            auto res = std::make_unique<server_task_result_slot_save_load>();
++                            res->id = task.id;
++                            res->id_slot = id_slot;
++                            res->filename = filename;
++                            res->is_save = false;
++                            res->n_tokens = slot->prompt.tokens.size();
++                            res->n_bytes = 0;
++                            res->t_ms = (ggml_time_us() - t_start) / 1000.0;
++                            res->restore_source = "active";
++                            res->n_reusable = slot->prompt.tokens.size();
++                            res->preserve_failed = !preserved;
++                            res->restore_reason = preserved ? "active_preserved_in_ram" : "active_preservation_unavailable";
++                            queue_results.send(std::move(res));
++                            break;
++                        }
++                        const auto & expected = task.slot_action.expected_prefix_tokens;
++                        const auto & target_ids = task.slot_action.target_tokens;
++                        if (expected.empty() || expected.size() > target_ids.size() ||
++                                target_ids.size() > size_t(slot->n_ctx) ||
++                                !std::equal(expected.begin(), expected.end(), target_ids.begin())) {
++                            send_error(task, "Invalid protected prefix/target", ERROR_TYPE_INVALID_REQUEST);
++                            break;
++                        }
++                        const int32_t n_vocab = llama_vocab_n_tokens(vocab);
++                        if (std::any_of(target_ids.begin(), target_ids.end(), [n_vocab](llama_token t) {
++                                return t < 0 || t >= n_vocab;
++                            })) {
++                            send_error(task, "Invalid protected prefix token", ERROR_TYPE_INVALID_REQUEST);
++                            break;
++                        }
++                        const server_tokens target(target_ids, false);
++                        const bool require_logits = expected.size() != target_ids.size();
++                        const auto active_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot->id);
++                        size_t best_score = prefix_reusable(slot->prompt, active_min, target, require_logits);
++                        auto best_source = server_prefix_source::active;
++                        auto best_ram = prompt_cache ? prompt_cache->states.end() :
++                            std::list<server_prompt_cache_state>::iterator{};
++                        if (prompt_cache) {
++                            for (auto it = prompt_cache->states.begin(); it != prompt_cache->states.end(); ++it) {
++                                const auto score = prefix_reusable(it->prompt, it->pos_min, target, require_logits);
++                                if (!it->data.main.empty() && server_prefix_better(score, server_prefix_source::ram,
++                                                                                  best_score, best_source)) {
++                                    best_score = score;
++                                    best_source = server_prefix_source::ram;
++                                    best_ram = it;
++                                }
++                            }
++                        }
++                        // The supervisor validated the file checksum/model identity and
++                        // supplies its exact pre-user tokens. Verify those again against
++                        // the native file after import, before acknowledging it.
++                        const size_t disk_score = std::min(expected.size(), target_ids.size() - (require_logits ? 1 : 0));
++                        if (server_prefix_better(disk_score, server_prefix_source::disk, best_score, best_source)) {
++                            best_source = server_prefix_source::disk;
++                            best_score = disk_score;
++                        }
++                        auto reply = [&](const std::string & source, size_t reusable, size_t bytes,
++                                         bool failed = false, const std::string & reason = "best_reusable_state") {
++                            auto res = std::make_unique<server_task_result_slot_save_load>();
++                            res->id = task.id;
++                            res->id_slot = id_slot;
++                            res->filename = filename;
++                            res->is_save = false;
++                            res->n_tokens = slot->prompt.tokens.size();
++                            res->n_bytes = bytes;
++                            res->t_ms = (ggml_time_us() - t_start) / 1000.0;
++                            res->restore_source = source;
++                            res->n_reusable = reusable;
++                            res->preserve_failed = failed;
++                            res->restore_reason = reason;
++                            queue_results.send(std::move(res));
++                        };
++                        if (best_source == server_prefix_source::active) {
++                            reply("active", best_score, 0);
++                            break;
++                        }
++                        // Detach a selected RAM entry so allocating the active
++                        // snapshot cannot evict the very state we are about to use.
++                        std::list<server_prompt_cache_state> selected;
++                        if (best_source == server_prefix_source::ram) {
++                            selected.splice(selected.end(), prompt_cache->states, best_ram);
++                        }
++                        bool preserved = false;
++                        try {
++                            preserved = preserve_prefix_active(*slot,
++                                selected.empty() ? 0 : selected.front().size());
++                        } catch (const std::exception &) {
++                            preserved = false;
++                        }
++                        if (!preserved) {
++                            if (!selected.empty()) {
++                                prompt_cache->states.splice(prompt_cache->states.end(), selected);
++                                prompt_cache->update();
++                            }
++                            reply("active", prefix_reusable(slot->prompt, active_min, target, require_logits),
++                                  0, true, "active_preservation_unavailable");
++                            break;
++                        }
++                        if (best_source == server_prefix_source::ram) {
++                            auto & state = selected.front();
++                            const auto & main = state.data.main;
++                            const auto & draft = state.data.drft;
++                            if (llama_state_seq_set_data_ext(ctx_tgt, main.data(), main.size(), slot->id, 0) != main.size() ||
++                                    (!draft.empty() && (!ctx_dft ||
++                                     llama_state_seq_set_data_ext(ctx_dft, draft.data(), draft.size(), slot->id, 0) != draft.size()))) {
++                                slot->prompt_clear();
++                                prompt_cache->states.splice(prompt_cache->states.end(), selected);
++                                prompt_cache->update();
++                                send_error(task, "Protected RAM state restore failed", ERROR_TYPE_SERVER);
++                                break;
++                            }
++                            const size_t bytes = main.size() + draft.size();
++                            slot->prompt = std::move(state.prompt);
++                            reply("ram", best_score, bytes);
++                            break;
++                        }
++                        // Only the winning SSD candidate reaches the legacy file
++                        // import below; all normal requests retain the old path.
++                    }
+                     try {
+                         size_t n_packed = 0;
+                         llama_tokens packed;
+@@ -3094,6 +3363,13 @@ private:
+                         if (!restored.validate(ctx_tgt)) {
+                             throw std::runtime_error("Invalid tokens in slot save file");
+                         }
++                        if (task.slot_action.restore_if_better) {
++                            const server_tokens expected(task.slot_action.expected_prefix_tokens, false);
++                            if (restored.size() != expected.size() ||
++                                    restored.get_common_prefix(expected) != expected.size()) {
++                                throw std::runtime_error("Protected slot file does not match its expected prefix");
++                            }
++                        }
+ 
+                         slot->prompt.clear();
+                         slot->prompt.tokens = std::move(restored);
+@@ -3118,6 +3394,11 @@ private:
+                     res->n_tokens = slot->prompt.tokens.size();
+                     res->n_bytes  = nread + nread_ckpt + nread_dft;
+                     res->t_ms     = t_restore_ms;
++                    if (task.slot_action.restore_if_better) {
++                        res->restore_source = "disk";
++                        res->n_reusable = task.slot_action.expected_prefix_tokens.size();
++                        res->restore_reason = "best_reusable_state";
++                    }
+                     queue_results.send(std::move(res));
+                 } break;
+             case SERVER_TASK_TYPE_SLOT_ERASE:
+@@ -3610,6 +3891,11 @@ private:
+                     // TODO: maybe move branch to outside of this loop in the future
+                     if (slot.state == SLOT_STATE_STARTED) {
+                         slot.stats.update_prompt_start();
++                        slot.checkpoint_grid = checkpoint_grid && slot.task->type == SERVER_TASK_TYPE_COMPLETION &&
++                                slot.task->params.n_cache_reuse == 0 && slot.lora.empty() &&
++                                input_tokens.find_next_media_chunk(0).first == nullptr &&
++                                slot.prompt.tokens.find_next_media_chunk(0).first == nullptr;
++                        slot.checkpoint_grid_seen = 0;
+ 
+                         slot.state = SLOT_STATE_PROCESSING_PROMPT;
+ 
+@@ -3914,6 +4200,7 @@ private:
+                             SLT_WRN(slot, "n_past was set to %d\n", n_past);
+                         }
+ 
++                        slot.checkpoint_ordinary_last = slot.prompt.checkpoints.empty() ? -1 : slot.prompt.checkpoints.back().n_tokens;
+                         slot.stats.n_prompt_cached    = n_past;
+                         slot.stats.n_prompt_processed = 0;
+ 
+@@ -4099,7 +4386,8 @@ private:
+                             const auto pos = slot.prompt.n_tokens();
+                             const auto & checkpoints = slot.prompt.checkpoints;
+ 
+-                            if (pos == last_user_pos || checkpoints.empty() || pos > checkpoints.back().n_tokens + params_base.checkpoint_min_step) {
++                            const int64_t last = slot.checkpoint_grid ? slot.checkpoint_ordinary_last : (checkpoints.empty() ? -1 : checkpoints.back().n_tokens);
++                            if (pos == last_user_pos || last < 0 || pos > last + params_base.checkpoint_min_step) {
+                                 break;
+                             }
+                         }
+@@ -4130,6 +4418,9 @@ private:
+                     const auto n_tokens_cur = batch.size() - n_tokens_prev;
+ 
+                     const auto n_tokens_start = slot.prompt.n_tokens() - n_tokens_cur;
++                    const uint8_t grid_anchor = slot.checkpoint_grid ?
++                            server_checkpoint_grid_anchor(n_tokens_start, slot.task->n_tokens(), n_batch) & ~slot.checkpoint_grid_seen : 0;
++                    const bool grid_checkpoint = do_checkpoint && grid_anchor != 0;
+ 
+                     const bool near_prompt_end = slot.task->n_tokens() < slot.prompt.n_tokens() + n_ubatch;
+ 
+@@ -4170,16 +4461,24 @@ private:
+                     do_checkpoint = do_checkpoint && !has_mtmd;
+ 
+                     // no need to create checkpoints that are too close together, unless it's the last user message
++                    const int64_t checkpoint_last = slot.checkpoint_grid ? slot.checkpoint_ordinary_last :
++                            (slot.prompt.checkpoints.empty() ? -1 : slot.prompt.checkpoints.back().n_tokens);
+                     do_checkpoint = do_checkpoint && (
+-                            slot.prompt.checkpoints.empty() ||
++                            checkpoint_last < 0 ||
+                             is_last_user_message || near_prompt_end ||
+-                            n_tokens_start > slot.prompt.checkpoints.back().n_tokens + params_base.checkpoint_min_step);
++                            n_tokens_start > checkpoint_last + params_base.checkpoint_min_step);
++                    const bool ordinary_checkpoint = do_checkpoint;
++                    do_checkpoint = do_checkpoint || (grid_checkpoint && pos_min >= 0 && !has_mtmd);
+                     SLT_DBG(slot, "main/do_checkpoint = %s, pos_min = %d, pos_max = %d\n", do_checkpoint ? "yes" : "no", pos_min, pos_max);
+ 
+                     // note: we create the checkpoint before calling llama_decode(), so the current batch is not
+                     //       yet processed and therefore it is not part of the checkpoint.
+                     if (do_checkpoint) {
+                         create_checkpoint(slot, n_tokens_cur, pos_min, pos_max);
++                        slot.checkpoint_grid_seen |= grid_anchor;
++                        if (ordinary_checkpoint) {
++                            slot.checkpoint_ordinary_last = n_tokens_start;
++                        }
+                     }
+                 }
+ 
+@@ -5254,6 +5553,8 @@ static json get_res_props(const server_context_meta & meta, const common_params
+         { "endpoint_slots",              params.endpoint_slots },
+         { "endpoint_props",              params.endpoint_props },
+         { "endpoint_metrics",            params.endpoint_metrics },
++        { "supports_prefix_restore_if_better", true },
++        { "supports_prefix_preserve_active",   true },
+         { "ui",                          params.ui },
+         { "ui_settings",                 meta.json_ui_settings },
+         { "chat_template",               tmpl_default },
+@@ -6079,6 +6380,34 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_restore(const
+         task.slot_action.id_slot  = id_slot;
+         task.slot_action.filename = filename;
+         task.slot_action.filepath = filepath;
++        task.slot_action.restore_if_better = json_value(request_data, "restore_if_better", false);
++        task.slot_action.preserve_active_only = json_value(request_data, "preserve_active_only", false);
++        if (task.slot_action.preserve_active_only && !task.slot_action.restore_if_better) {
++            throw std::invalid_argument("Active preservation requires opt-in transactional restore");
++        }
++        if (task.slot_action.restore_if_better && !task.slot_action.preserve_active_only) {
++            auto read_tokens = [&](const char * key) {
++                const auto & values = request_data.at(key);
++                if (!values.is_array() || values.empty() || values.size() > size_t(meta->slot_n_ctx)) {
++                    throw std::invalid_argument("Invalid protected prefix token array");
++                }
++                llama_tokens tokens;
++                tokens.reserve(values.size());
++                for (const auto & value : values) {
++                    if (!value.is_number_integer()) {
++                        throw std::invalid_argument("Protected prefix tokens must be integers");
++                    }
++                    const int64_t token = value.get<int64_t>();
++                    if (token < 0 || token > INT32_MAX) {
++                        throw std::invalid_argument("Protected prefix token outside supported range");
++                    }
++                    tokens.push_back(llama_token(token));
++                }
++                return tokens;
++            };
++            task.slot_action.target_tokens = read_tokens("target_tokens");
++            task.slot_action.expected_prefix_tokens = read_tokens("expected_prefix_tokens");
++        }
+         rd.post_task(std::move(task));
+     }
+ 
+diff --git a/tools/server/server-task.cpp b/tools/server/server-task.cpp
+index 2e513a33ecaf32fe54e679fb2b99f19e10479e40..12571cc573fbadabbb571e1641496398292b5e6f 100644
+--- a/tools/server/server-task.cpp
++++ b/tools/server/server-task.cpp
+@@ -1656,7 +1656,7 @@ json server_task_result_slot_save_load::to_json() {
+         };
+     }
+ 
+-    return json {
++    json result = json {
+         { "id_slot",    id_slot },
+         { "filename",   filename },
+         { "n_restored", n_tokens },
+@@ -1665,6 +1665,13 @@ json server_task_result_slot_save_load::to_json() {
+             { "restore_ms", t_ms }
+         }},
+     };
++    if (!restore_source.empty()) {
++        result["restore_source"] = restore_source;
++        result["n_reusable"] = n_reusable;
++        result["preserve_failed"] = preserve_failed;
++        result["restore_reason"] = restore_reason;
++    }
++    return result;
+ }
+ 
+ //
+@@ -1732,12 +1739,12 @@ size_t server_prompt_cache::n_tokens() const {
+     return res;
+ }
+ 
+-server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & prompt, size_t state_size_tgt, size_t state_size_dft) {
++server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & prompt, size_t state_size_tgt, size_t state_size_dft, bool exact, size_t reserved_size) {
+     // first check if the current state is contained fully in the cache
+     for (auto it = states.begin(); it != states.end(); ++it) {
+         const int cur_lcp_len = it->prompt.tokens.get_common_prefix(prompt.tokens);
+ 
+-        if (cur_lcp_len == (int) prompt.tokens.size()) {
++        if (cur_lcp_len == (int) prompt.tokens.size() && (!exact || it->prompt.tokens.size() == prompt.tokens.size())) {
+             SRV_TRC("%s", " - prompt is already in the cache, skipping\n");
+             return nullptr;
+         }
+@@ -1752,7 +1759,7 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
+     const size_t state_size_new = state_size_tgt + state_size_dft + checkpoints_size;
+ 
+     // skip over-limit entries to avoid disturbing the cache
+-    if (limit_size > 0 && state_size_new > limit_size) {
++    if (limit_size > 0 && (reserved_size > limit_size || state_size_new > limit_size - reserved_size)) {
+         SRV_WRN(" - prompt state size %.3f MiB exceeds cache size limit %.3f MiB, skipping\n",
+                 state_size_new / (1024.0 * 1024.0), limit_size / (1024.0 * 1024.0));
+         return nullptr;
+@@ -1773,7 +1780,7 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
+ 
+     if (limit_size > 0) {
+         // make room before allocating the new vectors to avoid breaching the limit
+-        while (!states.empty() && size() + state_size_new > limit_size) {
++        while (!states.empty() && size() + state_size_new + reserved_size > limit_size) {
+             SRV_WRN(" - making room for prompt cache entry, removing oldest entry (size = %.3f MiB)\n",
+                     states.front().size() / (1024.0 * 1024.0));
+ 
+diff --git a/tools/server/server-task.h b/tools/server/server-task.h
+index e7bb043988d762b7af74c47ca585fbec84aeb3e5..7a78718cecd026d224496e99f9d3655b3dfbe6a3 100644
+--- a/tools/server/server-task.h
++++ b/tools/server/server-task.h
+@@ -169,6 +169,10 @@ struct server_task {
+         int id_slot;
+         std::string filename;
+         std::string filepath;
++        bool restore_if_better = false;
++        bool preserve_active_only = false;
++        llama_tokens target_tokens;
++        llama_tokens expected_prefix_tokens;
+     };
+     slot_action slot_action;
+ 
+@@ -581,6 +585,10 @@ struct server_task_result_slot_save_load : server_task_result {
+     size_t n_tokens;
+     size_t n_bytes;
+     double t_ms;
++    std::string restore_source;
++    size_t n_reusable = 0;
++    bool preserve_failed = false;
++    std::string restore_reason;
+ 
+     virtual json to_json() override;
+ };
+@@ -653,6 +661,9 @@ struct server_prompt_data {
+ struct server_prompt_cache_state {
+     server_prompt prompt;
+     server_prompt_data data;
++    // Process-local metadata only; persisted slot format is unchanged.
++    int64_t pos_min = -1;
++    int64_t pos_max = -1;
+ 
+     size_t size() const {
+         size_t res = data.size();
+@@ -683,7 +694,8 @@ struct server_prompt_cache {
+ 
+     size_t n_tokens() const;
+ 
+-    server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
++    server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft,
++                                      bool exact = false, size_t reserved_size = 0);
+ 
+     bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
+ 
+diff --git a/tests/test-server-prefix-selection.cpp b/tests/test-server-prefix-selection.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..f2181b09a719ff46eefa36aa85291b084badfc37
+--- /dev/null
++++ b/tests/test-server-prefix-selection.cpp
+@@ -0,0 +1,39 @@
++#ifdef NDEBUG
++#undef NDEBUG
++#endif
++
++#include "../tools/server/server-prefix-selection.h"
++#include <cassert>
++#include <iostream>
++
++int main() {
++    assert(server_prefix_reusable(0, 17000, 0, 0, 0, {}) == 0);
++    assert(server_prefix_reusable(16000, 0, 16000, 0, 0, {}) == 0);
++    assert(server_prefix_reusable(16000, 17000, 16000, -1, 0, {}) == 0);
++    // An exact prefix can use the live recurrent state without rewinding it.
++    assert(server_prefix_reusable(16000, 17000, 16000, 15999, 0, {}) == 16000);
++    // A long conversation with matching text is NOT a reusable 16K state if
++    // its recurrent state and only checkpoint are beyond the divergence.
++    assert(server_prefix_reusable(16000, 17000, 16000, 59999, 0,
++        {{20000, 20001, 20000}}) == 0);
++    // The earlier checkpoint is usable, even though the live state is 60K.
++    assert(server_prefix_reusable(16000, 17000, 16000, 59999, 0,
++        {{8000, 8001, 8000}, {20000, 20001, 20000}}) == 8000);
++    // Equal complete prompts must still process a token to recover logits.
++    assert(server_prefix_reusable(16000, 16000, 16000, 15999, 0,
++        {{15800, 15801, 15800}}) == 15800);
++    // Importing a base is not generation: do not reserve a logits token.
++    assert(server_prefix_reusable(16000, 16000, 16000, 15999, 0, {}, false) == 16000);
++    // SWA eligibility follows the native position threshold.
++    assert(server_prefix_reusable(16000, 17000, 16000, 15000, 4096, {}) == 0);
++    assert(server_prefix_better(16000, server_prefix_source::active, 16000, server_prefix_source::disk));
++    assert(server_prefix_better(16000, server_prefix_source::ram, 16000, server_prefix_source::disk));
++    assert(!server_prefix_better(16000, server_prefix_source::ram, 16000, server_prefix_source::active));
++    assert(server_prefix_better(17000, server_prefix_source::disk, 16000, server_prefix_source::active));
++    const auto live_advanced = server_prefix_reusable(50000, 51000, 50000, 49999, 0, {});
++    assert(server_prefix_better(live_advanced, server_prefix_source::active, 16000, server_prefix_source::disk));
++    const auto unusable_ram = server_prefix_reusable(49000, 51000, 49000, 59999, 0,
++        {{50000, 50001, 50000}});
++    assert(server_prefix_better(16000, server_prefix_source::disk, unusable_ram, server_prefix_source::ram));
++    std::cout << "prefix selection invariants passed\n";
++}
+diff --git a/tools/server/server-prefix-selection.h b/tools/server/server-prefix-selection.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..65dacf58145fa337161b66cf242cf980844d4476
+--- /dev/null
++++ b/tools/server/server-prefix-selection.h
+@@ -0,0 +1,44 @@
++#pragma once
++
++#include <algorithm>
++#include <cstddef>
++#include <cstdint>
++#include <vector>
++
++// Pure policy for the opt-in slot restore path. No model, file or cache mutation.
++// Position arithmetic and checkpoint eligibility mirror prompt reuse below
++// TAG_CHECKPOINTS_FIX_POS_MIN in server-context.cpp.
++struct server_prefix_checkpoint_view {
++    int64_t pos_min;
++    int64_t pos_max;
++    size_t reusable_tokens;
++};
++
++inline size_t server_prefix_reusable(
++        size_t lcp, size_t target_tokens, int64_t pos_next, int64_t state_pos_min,
++        int64_t n_swa, const std::vector<server_prefix_checkpoint_view> & checkpoints,
++        bool require_logits = true) {
++    if (lcp == 0 || target_tokens == 0 || state_pos_min < 0) {
++        return 0;
++    }
++    const bool has_new_tokens = lcp < target_tokens || !require_logits;
++    const int64_t pos_eval = pos_next - (has_new_tokens ? 0 : 1);
++    const int64_t threshold = std::max<int64_t>(0, n_swa > 0 ? pos_eval - n_swa + 2 : pos_eval);
++    const size_t cap = std::min(lcp, target_tokens - (require_logits ? 1 : 0));
++    if (state_pos_min < threshold) {
++        return cap;
++    }
++    for (auto it = checkpoints.rbegin(); it != checkpoints.rend(); ++it) {
++        if (it->pos_max <= pos_next && (it->pos_min < threshold || it->pos_min == 0)) {
++            return std::min(cap, it->reusable_tokens);
++        }
++    }
++    return 0;
++}
++
++enum class server_prefix_source { active, ram, disk };
++
++inline bool server_prefix_better(size_t score, server_prefix_source source,
++                                 size_t best_score, server_prefix_source best_source) {
++    return score > best_score || (score == best_score && source < best_source);
++}

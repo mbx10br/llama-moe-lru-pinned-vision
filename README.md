@@ -27,7 +27,7 @@ Eight complementary features, each with a specific job:
 | **💾 Protected startup checkpoints** | Keeps two verified pre-user prefixes on SSD; restores the compatible base without replaying all the stable instructions. | Our [native selection patch](patches/llama.cpp/) and [controller](integrations/llama_cpp/), built on llama-server state save/restore |
 | **🧭 Cacheable agent preparation** | Indexes deferred capabilities and places static plugin instructions before the first user message, preserving on-demand skill loading. | [Hermes](https://github.com/NousResearch/hermes-agent), [Superpowers](https://github.com/obra/superpowers), and our [integration](integrations/hermes/) |
 
-**Availability:** the original LRU/vision/DMA bundles remain available. The tested `620d2225` native patch now includes selective pinned vision, sleep-cache preservation, experimental checkpoint anchors and transactional prefix selection. Portable controllers and optional Hermes/Tabby integrations are published alongside it. Start with the [versioned integration guide](docs/PERSISTENT_PREFIXES.md); these are source-level integrations, not a universal installer. The separate latest-upstream refresh remains unqualified.
+**Availability:** the original LRU/vision/DMA bundles remain available. The tested native integrations include selective pinned vision, sleep-cache preservation, experimental checkpoint anchors and transactional prefix selection. The newer [39da130f source bundle](patches/llama.cpp/) retains upstream SLRU and passed CUDA, CPU and real-model GPU checks; the earlier `620d2225` generation remains available. Portable controllers and optional Hermes/Tabby integrations are published alongside them. Start with the [versioned integration guide](docs/PERSISTENT_PREFIXES.md); these are source-level integrations, not a universal installer.
 
 ---
 
@@ -57,7 +57,7 @@ After a **process restart**, the ordinary RAM pool is gone. The protected initia
 
 MoE models activate a small selection of experts per token. A bounded GPU cache retains recently useful expert weights, reducing repeated host-memory access or transfers. Its size trades VRAM against cache misses; performance depends on routing locality, RAM bandwidth, PCIe and the workload.
 
-The original 122B setup uses the slot-based `--moe-expert-cache` interface. The later laptop runtime uses **`--moe-cache-mib 3712`**, allocating about **3,709.1 MiB**. The prepared upstream refresh keeps the native **50/50 SLRU** from PR #30637. That newer cache algorithm needs its own measurements; it does not inherit the older LRU speedups automatically.
+The original 122B setup uses the slot-based `--moe-expert-cache` interface. The first laptop return benchmarks used **`--moe-cache-mib 3712`**, allocating about **3,709.1 MiB**. The current laptop recipe uses **3,968 MiB**, a **131,072-token context**, **Q8_0 K / Q5_1 V** and the same 3,072 MiB conversation pool, with speculation off. The upstream refresh retains the native **50/50 SLRU** from PR #30637. Its measurements remain separate from the historical slot-cache speedups.
 
 ### 👁️ 2. Pinned vision: retain images while making room for experts
 
@@ -217,6 +217,12 @@ The first **real user requests after the complete restart**, without artificial 
 
 The 27B proxy's first byte arrived at **2.710 s**. On the laptop, a valid prefix was reported **55.771 s** after request start, but that interval combines loading, readiness and restoration; it cannot be labeled pure weight-load time. The operator described continuation as feeling immediate after loading. That perception is kept separate from measured latency. The report includes the slower real calls too, including a 23,120-token new suffix on the 27B; new content still requires work.
 
+The later **Base 1 repair** protects an exact recurrent anchor that ordinary cache pruning could discard. It preserves normal cache spacing and budgets, waits for the native writer, validates the paired state, then commits a fresh immutable SSD generation. The [Tabby integration](integrations/tabby/#validation-and-limits) includes the implementation and separate evidence: **43 portable CPU tests, 19 native-AST cases and eight GPU cases passed**.
+
+With the updated **27B K8/V4, one-slot, 130,000-token / DFlash2 Q4** profile, both bases restored after a backend restart. The first short Web and Telegram requests took **2.046 s / 1.198 s** in full request wall time after health was ready; a subsequent Web request took **0.241 s**. These are not TTFT measurements and exclude model startup. Insufficient space refuses the additional anchor safely; the repair does not replace the engine's general eviction policy.
+
+The [qualified upstream refresh](docs/UPSTREAM_REFRESH_20261020.md) uses the current **131,072-token / K8-V5.1 / 3,968 MiB expert** laptop recipe. It passed the same local **L3 23/23** and a matched 512-token generation check: **41.75 → 44.47 tok/s** in one ordered pair. Both real client bases were rebuilt and verified through sleep, native restart and the public FIFO. The report separates this qualification from the older return measurements and includes its limits.
+
 ### 🖥️ C. 122B workstation — expert cache, vision and DMA
 
 The original September results remain part of the project: a **122B Q2_0 MoE**, **RTX 5060 Ti 16 GB** and **PCIe 3.0 x16**. These figures were not rerun for the October documentation update and are separate from the laptop results.
@@ -261,12 +267,12 @@ The original fit example reported ~3.7 GB for dense/attention layers, ~2.5 GB KV
 | :--- | :--- |
 | Original LRU + pinned-vision bundle | Published: [unified patch](moe_lru_cache_and_pinned_vision.patch), [vision patch](pinned_vision_cuda_host.patch), [build guide](docs/LEGACY_122B_SETUP.md) and [test script](test_moe_lru.sh) |
 | Native RAM prompt cache and idle sleep | Upstream llama-server features; compatible configuration is required |
-| Preserve prompt cache through sleep | Published in the [tested `620d2225` patch](patches/llama.cpp/); same-process RAM preservation |
+| Preserve prompt cache through sleep | Published in the [versioned native bundles](patches/llama.cpp/); same-process RAM preservation |
 | APEX-inspired four-checkpoint adaptation | Included in that patch; experimental, with numerical limitations retained in the evidence |
 | Two protected pre-user SSD bases | [Native patch](patches/llama.cpp/) + [portable Python controller and tests](integrations/llama_cpp/); private slot API required |
 | Cacheable Hermes preparation | [Versioned integration and CPU tests](integrations/hermes/); original skill text preserved |
 | Tabby/EXL3 equivalent | [Optional integration](integrations/tabby/), versioned separately and licensed under AGPL-3.0 |
-| Latest-upstream refresh | Prepared against `0ce8cd11416c8840498e6701bcbe39ad4b858c2b`; not yet built, GPU-tested or released |
+| Upstream refresh · 2026-10-20 | Pinned `39da130fcd1b6ca47d3c0522a40eccff41ea3dfb`; CUDA build, CPU checks, real-model L3 **23/23**, sleep, vision and dual-prefix restart passed |
 
 The old bundle uses slot-based expert-cache flags and `MTMD_PINNED_HOST`. The newer local runtime uses a MiB budget and selective `ORNITH_MMPROJ_HOST_WEIGHTS`. Choose the matching source and patch generation; the [legacy guide](docs/LEGACY_122B_SETUP.md) keeps the original commands without presenting them as a universal installer for today's upstream.
 

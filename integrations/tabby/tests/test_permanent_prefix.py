@@ -4,6 +4,8 @@ import importlib.util
 import json
 from pathlib import Path
 import struct
+import shutil
+import weakref
 import tempfile
 import threading
 import types
@@ -29,6 +31,9 @@ class FakeDisk:
         self._lock = threading.RLock()
         self.pages = {}
         self.states = {}
+        self.recurrent_sides = {"target": object(), "draft": object()}
+        self.total_size = 0
+        self.writes = []
         Path(root).mkdir()
 
     def _page_path(self, key):
@@ -57,6 +62,36 @@ class FakeDisk:
 
     def _read_state_header(self, path):
         return self._header(path)
+
+    def _side_keymap(self, side):
+        return {side + "-native-layer": side + "-layer"}
+
+    def write_state(self, key, stash, force=False):
+        # Explicit native-layout fixture; no EXL3 implementation is bundled.
+        self.writes.append((key, force))
+        sides = {}
+        image_offset = 0
+        for side in self.recurrent_sides:
+            sides[side] = {"ints": {"position": stash[side]["position"],
+                                     "checkpoint_size": stash[side]["checkpoint_size"]},
+                           "layers": {side + "-layer": {"tensors": [{"offset": 0, "nbytes": 8}]}},
+                           "image_offset": image_offset, "image_size": 8}
+            image_offset += 8
+        header = {"phash": key.hex(), "fingerprint": self.fingerprint,
+                  "position": stash["position"], "top": {"position": stash["position"],
+                  "checkpoint_size": stash["checkpoint_size"]}, "sides": sides, "data_offset": 0}
+        self.save_state_header(key, header, b"S" * image_offset)
+        self.states[key] = {}
+        return True
+
+    def save_state_header(self, key, header, payload=b"S" * 16):
+        for _ in range(10):
+            encoded = json.dumps(header).encode()
+            header["data_offset"] = 4 + len(encoded)
+        encoded = json.dumps(header).encode()
+        path = Path(self._state_path(key))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(struct.pack("<I", len(encoded)) + encoded + payload)
 
     def has_state(self, key):
         return key in self.states
@@ -91,13 +126,19 @@ class FakeDisk:
                              + struct.pack("<" + "q" * 256, *tokens[position:position + 256]) + b"KV")
             hashes.append(key)
             previous = key
-        path = Path(self._state_path(previous))
-        path.parent.mkdir(parents=True, exist_ok=True)
-        header = json.dumps({"phash": previous.hex(), "fingerprint": self.fingerprint,
-                             "position": len(tokens), "target": True, "draft": True}).encode()
-        path.write_bytes(struct.pack("<I", len(header)) + header + b"PAIRED-RECURRENT")
+        self.write_state(previous, paired_stash(len(tokens)), force=True)
         self._load_index()
         return hashes
+
+
+def paired_stash(position, sides=("target", "draft")):
+    return {"position": position, "checkpoint_size": 8 * len(sides),
+            **{side: {"position": position, "checkpoint_size": 8} for side in sides}}
+
+
+def paired_state(position, sides=("target", "draft")):
+    return types.SimpleNamespace(position=position, checkpoint_size=8 * len(sides),
+        **{side: types.SimpleNamespace(position=position, checkpoint_size=8) for side in sides})
 
 
 class ArtifactTests(unittest.TestCase):
@@ -194,14 +235,18 @@ class FakeJob:
 
     def maybe_stash_recurrent(self, cache, interval):
         self.stash_position = self.sequences[0].kv_position
+        self.recurrent_state = paired_state(self.stash_position)
+        self.stash = paired_stash(self.stash_position)
 
 
 class FakeEngine:
     def __init__(self):
         self.active_jobs = []
         self.pending_jobs = []
-        self.recurrent_cache = object()
-        self.disk_page_cache = types.SimpleNamespace(has_state=lambda key: True)
+        temporary = tempfile.mkdtemp(prefix="prefix-prefill-test-")
+        weakref.finalize(self, shutil.rmtree, temporary)
+        self.disk_page_cache = FakeDisk(Path(temporary) / "ram")
+        self.recurrent_cache = types.SimpleNamespace(get_stashed=lambda key: self.job.stash)
 
     def enqueue(self, job):
         job.processed = []
@@ -216,7 +261,9 @@ class FakeEngine:
                                                for n in range(len(job.ids) // 256)]
 
     def flush_cache_to_disk(self, **kwargs):
-        pass
+        hashes = self.disk_page_cache.create(self.job.processed)
+        for page, key in zip(self.job.sequences[0].allocated_pages, hashes):
+            page.phash = key
 
     def cancel(self, job):
         self.active_jobs.remove(job)

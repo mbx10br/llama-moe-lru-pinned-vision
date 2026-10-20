@@ -45,11 +45,107 @@ def file_digest(path):
     return checksum.hexdigest()
 
 
+def sync_directory(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def aligned_tokens(tokens):
     if (not isinstance(tokens, list) or not PAGE_SIZE <= len(tokens) <= MAX_TOKENS
             or any(type(t) is not int or not 0 <= t < 2**31 for t in tokens)):
         raise PrefixError("invalid-prefix-tokens")
     return tokens[:len(tokens) // PAGE_SIZE * PAGE_SIZE]
+
+
+def validate_native_checkpoint(disk, anchor, position):
+    """Check the native paired layout, not merely an indexed checkpoint key.
+
+    The disk fingerprint binds target/draft models and cache formats. Dense
+    draft models legitimately have no recurrent side; the live runtime decides
+    which sides and layer identities must be present.
+    """
+    path = Path(disk._state_path(anchor))
+    header = disk._read_state_header(str(path))
+    expected = set(disk.recurrent_sides)
+    if (not expected or header is None or not disk.has_state(anchor)
+            or header.get("fingerprint") != disk.fingerprint
+            or header.get("phash") != anchor.hex()
+            or header.get("position") != position
+            or header.get("top", {}).get("position") != position
+            or set(header.get("sides", {})) != expected):
+        raise PrefixError("paired-recurrent-state-incompatible")
+    checkpoint_size = header["top"].get("checkpoint_size")
+    if type(checkpoint_size) is not int or checkpoint_size <= 0:
+        raise PrefixError("paired-recurrent-state-incompatible")
+    total_size = 0
+    data_end = header["data_offset"]
+    for side, info in header["sides"].items():
+        ints = info.get("ints", {})
+        side_size = ints.get("checkpoint_size")
+        keymap = disk._side_keymap(side)
+        if (ints.get("position") != position or type(side_size) is not int
+                or side_size <= 0 or not keymap
+                or set(info.get("layers", {})) != set(keymap.values())):
+            raise PrefixError("paired-recurrent-state-incompatible")
+        total_size += side_size
+        image_offset, image_size = info.get("image_offset"), info.get("image_size")
+        if (type(image_offset) is not int or type(image_size) is not int
+                or image_offset < 0 or image_size < 0):
+            raise PrefixError("paired-recurrent-state-incompatible")
+        for layer in info["layers"].values():
+            for tensor in layer.get("tensors", []):
+                offset, size = tensor.get("offset"), tensor.get("nbytes")
+                if (type(offset) is not int or type(size) is not int
+                        or offset < 0 or size < 0 or offset + size > image_size):
+                    raise PrefixError("paired-recurrent-state-incompatible")
+        data_end = max(data_end, header["data_offset"] + image_offset + image_size)
+    if total_size != checkpoint_size or path.stat().st_size < data_end:
+        raise PrefixError("paired-recurrent-state-incompatible")
+    return header
+
+
+def persist_exact_anchor(engine, job, anchor, position):
+    """One protected checkpoint after the ordinary flush, before SSD commit.
+
+    Caller owns generator quiescence and the live prefill job until publication.
+    Normal spacing/pruning is unchanged outside this short transaction. Avoid
+    asking native eviction to make space: it may evict this prefix's KV pages,
+    and older EXL3 versions can loop when all remaining pages are rooted.
+    """
+    disk = engine.disk_page_cache
+    stash = engine.recurrent_cache.get_stashed(anchor)
+    state = job.recurrent_state
+    expected = {side for side in ("target", "draft")
+                if getattr(state, side, None) is not None}
+    actual = {side for side in ("target", "draft")
+              if isinstance(stash, dict) and isinstance(stash.get(side), dict)}
+    if (not expected or expected != set(disk.recurrent_sides) or actual != expected
+            or not isinstance(stash, dict) or stash.get("position") != position
+            or state.position != position
+            or stash.get("checkpoint_size") != state.checkpoint_size):
+        raise PrefixError("paired-recurrent-anchor-stash-incompatible")
+    for side in expected:
+        component = getattr(state, side)
+        side_stash = stash[side]
+        if (component.position != position or side_stash.get("position") != position
+                or side_stash.get("checkpoint_size") != component.checkpoint_size):
+            raise PrefixError("paired-recurrent-anchor-stash-incompatible")
+    if not disk.has_state(anchor):
+        required = stash["checkpoint_size"] + 4096
+        with disk._lock:
+            if disk.pending_pages or disk.pending_states or getattr(disk, "_promotions", 0):
+                raise PrefixError("cache-io-busy")
+            if disk.total_size + required > disk.max_size:
+                raise PrefixError("prefix-anchor-ram-tier-space-required")
+            if not disk.write_state(anchor, stash, force=True):
+                raise PrefixError("paired-recurrent-anchor-write-rejected")
+        # This waits for native serialization/index publication, and deliberately
+        # does not call Generator.flush_cache_to_disk (which prunes again).
+        disk.flush()
+    validate_native_checkpoint(disk, anchor, position)
 
 
 def runtime_identity(container):
@@ -140,6 +236,7 @@ class SinglePrefixStore:
                 os.fsync(stream.fileno())
             os.chmod(temporary, mode)
             os.replace(temporary, path)
+            sync_directory(path.parent)
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
@@ -197,13 +294,19 @@ class SinglePrefixStore:
                 or state_header.get("position") != len(tokens)
                 or state_header.get("phash") != previous.hex()):
             raise PrefixError("paired-recurrent-state-missing")
+        validate_native_checkpoint(disk, previous, len(tokens))
         files.append((state_path, f"states/{previous.hex()}.rs"))
         size = sum(path.stat().st_size for path, _ in files)
         if size > MAX_BUNDLE_BYTES:
             raise PrefixError("prefix-bundle-too-large")
-        generation = digest({"tokens": tokens, "source": source_identity, "runtime": runtime})
-        destination = self.root / generation
         temporary = Path(tempfile.mkdtemp(prefix=".preparing-", dir=self.root))
+        # Always publish a fresh immutable artifact. Identical semantic inputs
+        # may regenerate an already selected bundle; never remove that bundle
+        # before the new pointer commits. Selection still uses exact tokens,
+        # source and runtime, not this unique transaction identity.
+        generation = digest({"tokens": tokens, "source": source_identity,
+                             "runtime": runtime, "transaction": temporary.name})
+        destination = self.root / generation
         try:
             entries = []
             for path, relative in files:
@@ -211,6 +314,8 @@ class SinglePrefixStore:
                 target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 shutil.copyfile(path, target)
                 target.chmod(0o600)
+                with target.open("rb") as stream:
+                    os.fsync(stream.fileno())
                 entries.append({"path": relative, "size": target.stat().st_size, "sha256": file_digest(target)})
             manifest = {"format": FORMAT, "generation": generation, "tokens": tokens,
                         "token_digest": digest(tokens), "source_identity": source_identity,
@@ -218,13 +323,12 @@ class SinglePrefixStore:
                         "anchor": previous.hex(), "files": entries, "bytes": size,
                         "created_at": time.time()}
             self.atomic_json(temporary / "manifest.json", manifest)
+            for directory in (temporary / "pages", temporary / "states", temporary):
+                sync_directory(directory)
             if destination.exists():
-                # The replacement is already complete. A corrupted managed
-                # copy can be regenerated; it is never selected again as-is.
-                if destination.is_symlink():
-                    raise PrefixError("unsafe-prefix-generation")
-                shutil.rmtree(destination)
+                raise PrefixError("prefix-generation-collision")
             os.replace(temporary, destination)
+            sync_directory(self.root)
             self.atomic_json(self.root / "current.json", {"generation": generation})
             self._manifest = manifest
             self.report("ready", "prepared-before-user", len(tokens), bytes=size)
@@ -708,8 +812,7 @@ def _prefill_only(engine, tokens, job_factory, tensor_factory, deadline_seconds,
         job.maybe_stash_recurrent(engine.recurrent_cache, PAGE_SIZE)
         hashes = [page.phash for page in job.sequences[0].allocated_pages[:len(tokens) // PAGE_SIZE]]
         engine.flush_cache_to_disk(wait=True)
-        if not engine.disk_page_cache.has_state(hashes[-1]):
-            raise PrefixError("paired-recurrent-state-missing")
+        persist_exact_anchor(engine, job, hashes[-1], len(tokens))
         return on_ready(hashes) if on_ready is not None else hashes
     finally:
         # The normal cancellation path releases only our temporary job. Earlier

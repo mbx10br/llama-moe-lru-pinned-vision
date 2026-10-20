@@ -3,9 +3,10 @@
   "qualification_date": "2026-10-20",
   "export_cpu_tests": {
     "command": "python3 -I -m unittest discover -s integrations/tabby/tests -v",
-    "passed": 29,
+    "passed": 43,
     "requires_model": false,
-    "requires_cuda": false
+    "requires_cuda": false,
+    "previous_passed": 29
   },
   "native_evidence": {
     "status": "prior_observations_not_rerun_during_export",
@@ -99,6 +100,134 @@
     "Short inert requests; generation rate is not a broad throughput benchmark.",
     "Configured 130K capacity is not a filled-130K recovery or quality qualification.",
     "No private request payload, system prompt, model checkpoint or deployment configuration is included.",
-    "Native source compatibility is qualified only against the referenced Tabby commit and checked EXL3 v1.6.3 files."
-  ]
+    "Native source compatibility is qualified only against the referenced Tabby commit and checked EXL3 v1.6.3 files.",
+    "Post-flush anchor admission may fail safely near capacity; this is not a fix for general native eviction or full-cache progress.",
+    "No real asynchronous writer race, tensor-parallel-rank or power-loss filesystem qualification is claimed."
+  ],
+  "base1_fix_qualification": {
+    "status": "PASS",
+    "date": "2026-10-20",
+    "source_sha256": "65f35b4a850fcce5a0807f10decca1b855d7e136398d97f7102e6ecf08de7325",
+    "model": "Qwen3.8 27B EXL3 SC-3.00-H4",
+    "draft": "DFlash2 Q4",
+    "target_kv": "K8/V4",
+    "parallel_slots": 1,
+    "configured_context_tokens": 130000,
+    "native_budget_changed": false,
+    "model_profile_unchanged": true,
+    "native_ast_cpu_tests": {
+      "passed": 19,
+      "requires_cuda": false,
+      "harness_bundled": false,
+      "native_format": {
+        "pages": "EXL3KVP1",
+        "recurrent": "EXL3RCS1",
+        "actual_file_io": true,
+        "sqlite_state_index": true,
+        "methods": "native AST bodies extracted unchanged",
+        "substitutions": [
+          "tiny bytearray tensors and their structural pack/unpack primitive",
+          "CPU pool",
+          "writer queue executes synchronously",
+          "SSD-import index enumeration",
+          "job prefill arithmetic"
+        ]
+      },
+      "proven": [
+        "off-grid anchor pruned by ordinary native flush and normally rejected by spacing",
+        "candidate force-writes exactly one anchor after pruning before SSD publication",
+        "native state_layout/write/read preserve target/draft bytes in synthetic tensors",
+        "missing/incorrect position/side/layer/runtime/truncated payload rejected",
+        "near-capacity rejects before eviction",
+        "writer/copy/pointer errors preserve previous selected SSD generation",
+        "same semantics use fresh immutable generation, no in-place deletion",
+        "both independent protected bases restore into a fresh empty cache",
+        "sentinel is not archived and job always cancelled",
+        "normal native pruning remains active after transaction"
+      ],
+      "limits": [
+        "not CUDA or actual model numerical validation",
+        "no real asynchronous writer race or TP-rank tests",
+        "normal global flush and restore retain existing native eviction behavior; this candidate guards only extra anchor write",
+        "no general make_room fix",
+        "power-loss fsync semantics require actual filesystem validation"
+      ]
+    },
+    "gpu_request_cases_passed": 8,
+    "measurements": [
+      {
+        "case": "telegram-prime",
+        "request_wall_seconds": 29.241,
+        "input_tokens": 23061,
+        "cached_tokens": 22784,
+        "completion_tokens": 2
+      },
+      {
+        "case": "web-prime",
+        "request_wall_seconds": 22.576,
+        "input_tokens": 17924,
+        "cached_tokens": 17664,
+        "completion_tokens": 2
+      },
+      {
+        "case": "telegram-long-branch",
+        "request_wall_seconds": 23.854,
+        "input_tokens": 38065,
+        "cached_tokens": 23040,
+        "completion_tokens": 3
+      },
+      {
+        "case": "telegram-static-tail-change",
+        "request_wall_seconds": 0.971,
+        "input_tokens": 23063,
+        "cached_tokens": 22784,
+        "completion_tokens": 3
+      },
+      {
+        "case": "telegram-canonical-return",
+        "request_wall_seconds": 0.329,
+        "input_tokens": 23062,
+        "cached_tokens": 23040,
+        "completion_tokens": 3
+      },
+      {
+        "case": "web-after-restart",
+        "request_wall_seconds": 2.046,
+        "input_tokens": 17925,
+        "cached_tokens": 17664,
+        "completion_tokens": 3
+      },
+      {
+        "case": "telegram-after-restart",
+        "request_wall_seconds": 1.198,
+        "input_tokens": 23062,
+        "cached_tokens": 22784,
+        "completion_tokens": 3
+      },
+      {
+        "case": "web-after-restart",
+        "request_wall_seconds": 0.241,
+        "input_tokens": 17925,
+        "cached_tokens": 17920,
+        "completion_tokens": 3
+      }
+    ],
+    "measurement_scope": "Full request wall time, not streaming TTFT; short inert replies, zero real tool executions or Telegram messages. Restart rows measure requests after backend health returned, excluding model startup time.",
+    "protected_bases_after_restart": [
+      {
+        "id": "base-1",
+        "tokens": 22784,
+        "bytes": 728176027,
+        "state": "ready"
+      },
+      {
+        "id": "base-2",
+        "tokens": 17664,
+        "bytes": 591815727,
+        "state": "ready"
+      }
+    ],
+    "portable_export_scope": "43 standard-library tests rerun against header-only export; 19 native AST tests and 8 GPU requests are separate deployment evidence, not reproduced by this export.",
+    "capacity_policy": "Only the extra post-flush anchor write checks room before write, without requesting eviction; ordinary native flush/restore eviction remains unchanged."
+  }
 }

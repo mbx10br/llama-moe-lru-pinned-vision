@@ -22,7 +22,7 @@ Exact rendered system + tools, before any user message
       native bounded tmpfs tier → CPU cache → GPU context
 ```
 
-It contains **three source modules, a five-file Tabby hook patch, and 29 CPU
+It contains **three source modules, a five-file Tabby hook patch, and 43 CPU
 tests**. It does not include model weights, checkpoints, client prompts, client
 tool catalogs, credentials, bots, network rules, service units or a GPU scheduler.
 No additional TCP administrative endpoint is added.
@@ -47,6 +47,36 @@ it is not presented as a tested general cache for every Transformer.
 patch reproduces the five deployed files byte for byte. The three exported
 modules differ from their tested versions only by their license/date comment
 headers. No running backend was modified to create this export.
+
+## Exact-anchor repair (Base 1, 2026-10-20)
+
+A static prefix can end between the native 4,096-token checkpoint intervals.
+After a longer conversation branch, the ordinary native flush may prune that
+interior recurrent checkpoint even though the exact KV page chain remains.
+Previously, protected publication then failed with
+`paired-recurrent-state-missing`; the existing SSD generation remained selected.
+The defect was reproduced without memory pressure.
+
+The protected transaction now keeps its prefill job and quiescence ownership
+until publication. It performs the ordinary flush first, then validates the
+exact live target/draft stash and force-writes **one missing anchor**, drains the
+native writer, validates its full paired layout, and commits the SSD bundle.
+There is no second global flush/prune between the anchor write and publication.
+Normal native spacing, pruning and cache budgets remain unchanged.
+
+Publication uses a fresh immutable generation even for identical inputs. Files
+and directories are synced before the atomic selection pointer changes; a
+pre-commit copy/writer/pointer failure retains the previous selected generation.
+Checks cover runtime fingerprint, absolute positions, recurrent sides/layers,
+checkpoint sizes and truncated tensor payloads. A dense draft without recurrent
+layers is supported by validating the sides actually present in the runtime.
+
+**Capacity limit:** the extra post-flush anchor write is refused if pending I/O
+or insufficient native-tier space prevents safe admission. It does not request
+additional eviction to make room. This is a safe failure, not a general repair
+for EXL3 eviction progress; ordinary global flush/restore still use native
+behavior. Real asynchronous writer races, tensor-parallel ranks and filesystem
+power-loss behavior have not been qualified.
 
 ## What each piece does
 
@@ -191,13 +221,18 @@ reverting code alone will not discover the nested generations.
 python3 -I -m unittest discover -s integrations/tabby/tests -v
 ```
 
-The **29 CPU tests** cover reboot-style RAM loss, A → B → A without prefill on
+The **43 CPU tests** cover reboot-style RAM loss, A → B → A without prefill on
 exact use, front edits replacing only the closest base, corruption isolation,
 missing middle-page reimport, inode-preserving migration, exact token/paired-state
 validation, pre-user neutrality, busy refusal, publication before releasing job
-references, bounded tmpfs storage and private socket ownership/lease races.
+references, bounded tmpfs storage and private socket ownership/lease races. The 14 added
+portable regressions cover exact-anchor admission and ordering, side/position/
+layer/runtime/payload rejection, safe near-capacity refusal, and immutable
+publication across copy, sync and pointer failures. Existing fixture files now
+represent the paired native header rather than a generic state placeholder.
+These tests use standard-library fixtures; no native EXL3 source is bundled.
 
-Native GPU checks used a 27B EXL3 SC-3.00-H4 model with DFlash2 Q4, K5/V4 target
+Historical native GPU checks used a 27B EXL3 SC-3.00-H4 model with DFlash2 Q4, K5/V4 target
 cache, two slots and a 130K configured context. Two independent SDK-assembled
 client prefixes were validated with different fresh user requests and alternated
 through the ordinary existing admission route. Their hot first-token latencies
@@ -205,10 +240,33 @@ were **0.509 s** and **0.875 s**, reusing **23,040/23,081** and **16,128/16,378*
 tokens. Both SSD artifacts included the intended static bootstrap and excluded
 the user boundary. Initial new-base prefill/publication took 22.795 s / 15.839 s.
 
+The Base 1 repair was subsequently qualified in a separate deployment with
+**K8/V4, one slot, 130,000 context tokens and DFlash2 Q4**, without changing the
+model profile or native memory budgets. All **19 native-AST CPU cases** and
+**eight GPU request cases** passed. That CPU harness exercised native state
+layout, serialization, spacing and pruning bodies against tiny synthetic CPU
+tensors. It is separate evidence, not a dependency of this portable package.
+
+After a backend restart, both protected bases were restored before new requests:
+
+| Request | Cached / input tokens | Full request wall time |
+|---|---:|---:|
+| Client B, first return | 17,664 / 17,925 | 2.046 s |
+| Client A, first return | 22,784 / 23,062 | 1.198 s |
+| Client B, next return | 17,920 / 17,925 | 0.241 s |
+
+These latest times cover complete short requests after backend health returned;
+they are **not streaming TTFT and exclude model startup time**. The two committed
+bases contain 22,784 and 17,664 tokens, occupying 728,176,027 and 591,815,727 bytes.
+The eight cases also covered initial preparation, a longer branch, a static-tail
+change and canonical return. They executed no real client tools or Telegram
+messages.
+
 These are short-request cache checks, not a general throughput benchmark, a
 full-130K recovery test, or a guarantee of sampling/quality equivalence for every
-model. CPU export tests were rerun; the native observations are prior deployment
-evidence. This export operation performed no inference, restart or deployment.
+model. All 43 portable CPU tests and the source compatibility checker were rerun
+for this export. The native-AST and GPU observations are separate deployment
+evidence; creating this package performed no inference, restart or deployment.
 See [VALIDATION.json](VALIDATION.json) for the compact, sanitized evidence.
 
 ## License and attribution

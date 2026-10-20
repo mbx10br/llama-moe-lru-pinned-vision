@@ -17,10 +17,13 @@ def main():
     parser.add_argument('--source', type=Path, required=True,
                         help='Existing llama.cpp Git checkout containing the pinned base object')
     parser.add_argument('--compile-policy', action='store_true')
+    parser.add_argument('--manifest', default='manifest.json',
+                        choices=('manifest.json', 'manifest-39da130f.json'),
+                        help='Select the historical or latest pinned source generation')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     directory = root / 'patches' / 'llama.cpp'
-    manifest = json.loads((directory / 'manifest.json').read_text())
+    manifest = json.loads((directory / args.manifest).read_text())
     patch = directory / manifest['patch']
     assert hashlib.sha256(patch.read_bytes()).hexdigest() == manifest['patch_sha256']
     with tempfile.TemporaryDirectory(prefix='native-patch-check-') as temporary:
@@ -43,7 +46,7 @@ def main():
             run('c++', '-std=c++17', '-O2', '-Wall', '-Wextra', '-Werror',
                 str(tree / 'tests/test-server-prefix-selection.cpp'), '-o', str(executable))
             print(run(str(executable)).decode().strip())
-    print('Pinned patch applies; all ten source digests match the tested export.')
+    print(f"Pinned patch applies; all {len(manifest['files'])} source digests match the export.")
 
 
 if __name__ == '__main__':
