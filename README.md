@@ -1,19 +1,20 @@
-# 🧠 MoE LRU Cache + Pinned Vision + Reusable Context
+# 🧠 MoE LRU Cache + Pinned Vision + Persistent Context
 
 **Run larger models locally, keep useful conversation state, and give the GPU back between uses.**
 
-This project brings expert caching, selective vision offload and conversation-state reuse together in `llama.cpp`. Use the model for coding, chat or images; let it rest while you game, render or run another model; then reload the weights and resume from a compatible cached prefix.
+This project brings expert caching, selective vision offload and conversation-state reuse together in `llama.cpp`. Use the model for coding, chat or images; let it rest while you game, render or run another model; then reload the weights and resume from a compatible cached prefix. Protected startup checkpoints on SSD also preserve an agent's stable instructions and tools across process restarts.
 
 > 🚀 **Measured highlights**<br>
 > **122B on a 16 GB GPU:** up to **15.16 tok/s**, with a separate **256K** profile at **12.20 tok/s**.<br>
 > **35B laptop:** **6,952 → 216 MiB** process VRAM during sleep; **99.22%** of a short fixture's input reused on return.<br>
-> **APEX-inspired recovery:** up to **63.90% less prompt-processing time** in the tested edited-history cases.
+> **APEX-inspired recovery:** up to **63.90% less prompt-processing time** in the tested edited-history cases.<br>
+> **Ready agent prefixes:** **0.98–1.21 s** to the first token when switching interfaces on the loaded 35B laptop; separate Web and Telegram bases survive a complete serving-stack restart.
 
 These figures come from two different test environments. The configurations, comparisons and limits are recorded in [Benchmarks & Validation](#benchmarks).
 
 ## 🌟 Overview & Attribution
 
-Six complementary features, each with a specific job:
+Eight complementary features, each with a specific job:
 
 | Feature | What it does | Foundation / attribution |
 | :--- | :--- | :--- |
@@ -23,8 +24,10 @@ Six complementary features, each with a specific job:
 | **💬 Reusable conversation cache** | Saves KV and recurrent state in bounded host RAM so compatible conversations can be restored between requests. | [ggerganov and contributors, prompt caching #16391](https://github.com/ggml-org/llama.cpp/pull/16391) |
 | **📍 APEX-inspired checkpoints** | Adds intermediate recovery points so an edited conversation can resume before its changed suffix. | [VectorAnvil/APEX V2 checkpoint research](https://github.com/VectorAnvil/apex-r9700/blob/main/v2/reports/cache-coverage.md); local experimental adaptation |
 | **🌙 Idle sleep + cached return** | Releases model VRAM after inactivity and preserves compatible conversation state through same-process sleep/wake. | [llama-server native sleep](https://github.com/ggml-org/llama.cpp/tree/master/tools/server) plus our preservation integration |
+| **💾 Protected startup checkpoints** | Keeps two verified pre-user prefixes on SSD; restores the compatible base without replaying all the stable instructions. | Our [native selection patch](patches/llama.cpp/) and [controller](integrations/llama_cpp/), built on llama-server state save/restore |
+| **🧭 Cacheable agent preparation** | Indexes deferred capabilities and places static plugin instructions before the first user message, preserving on-demand skill loading. | [Hermes](https://github.com/NousResearch/hermes-agent), [Superpowers](https://github.com/obra/superpowers), and our [integration](integrations/hermes/) |
 
-**Availability:** the original LRU/vision/DMA patch bundles are published here. The later sleep-cache integration and APEX-inspired candidate were tested locally on base `620d2225`; those newer patch files are not yet included in this repository. A refresh against upstream `0ce8cd114` is prepared locally, with build/performance validation still pending.
+**Availability:** the original LRU/vision/DMA bundles remain available. The tested `620d2225` native patch now includes selective pinned vision, sleep-cache preservation, experimental checkpoint anchors and transactional prefix selection. Portable controllers and optional Hermes/Tabby integrations are published alongside it. Start with the [versioned integration guide](docs/PERSISTENT_PREFIXES.md); these are source-level integrations, not a universal installer. The separate latest-upstream refresh remains unqualified.
 
 ---
 
@@ -34,13 +37,17 @@ Expert caching and pinned vision make active inference fit the GPU. Conversation
 
 ![Memory architecture: pageable experts, selectively pinned vision and saved conversation states in host RAM; bounded expert cache, temporary vision work and active context in GPU VRAM.](docs/assets/memory-architecture.svg)
 
-The two caches hold different things: the **expert cache** stores model weights in VRAM; the **conversation cache** stores calculations from prior inputs in RAM. APEX changes where recovery points are retained inside a conversation. It does not create a second 3 GiB conversation pool.
+The caches hold different things: the **expert cache** stores model weights in VRAM; the **conversation cache** stores calculations from prior inputs in RAM. APEX changes where recovery points are retained inside a conversation. The **protected SSD bases** retain only the stable context before the first user message. They do not duplicate a whole conversation or create another RAM cache pool.
 
 ### 🎮 Use the model, then use the rest of your computer
 
 ![Model lifecycle: active inference, save state after inactivity, free GPU capacity for other applications, then reload weights and restore a compatible prefix on the next request.](docs/assets/idle-return.svg)
 
 The tested laptop rests after **20 minutes without inference**. Health/model-metadata queries do not wake it. The next inference reloads the model weights, restores a matching cached state when available, and evaluates the remaining input. Weight reload still takes time; cache reuse avoids repeating all of the prompt work when a usable state survives.
+
+![Protected prefix lifecycle: keep Web and Telegram bases on SSD, reuse a better active or RAM state when available, and restore the compatible SSD base after restart before processing new content.](docs/assets/protected-prefix-return.svg)
+
+After a **process restart**, the ordinary RAM pool is gone. The protected initial bases remain on SSD. Each backend restores its own compatible states; no attention or recurrent state is shared between different models, quantizations or engines. The [new return benchmarks](docs/PREFIX_BENCHMARKS.md) separate weight loading, cache reuse, first-token time and complete response time.
 
 ---
 
@@ -94,7 +101,7 @@ flowchart LR
     class C,D changed;
 ```
 
-The local gate is `ORNITH_CHECKPOINT_GRID=1`: text only, one slot, four checkpoints, no SWA, LoRA, speculation or cache-reuse shifting. Media uses the prior path. We did not import APEX's AMD kernels or its complete batching implementation. A static agent prefix, such as 25K tokens, has no separately protected anchor today; an appropriate checkpoint must still survive before the divergence.
+The local gate is `ORNITH_CHECKPOINT_GRID=1`: text only, one slot, four checkpoints, no SWA, LoRA, speculation or cache-reuse shifting. Media uses the prior path. We did not import APEX's AMD kernels or its complete batching implementation. These ordinary anchors remain evictable; the separate protected-prefix controller below provides persistent startup bases.
 
 This remains **experimental**. Six main short fixtures matched generated IDs and reported top-10 logprobs. A strict boundary-prefix test failed full-token equality; follow-ups also found later-token variation with the feature disabled, while a fresh grid-prefix case still diverged later. Structured-chat comparisons matched. The [evidence JSON](benchmarks/cache-return-20261019.json) preserves those results; they do not establish universal numerical parity or full-context quality.
 
@@ -102,7 +109,31 @@ This remains **experimental**. Six main short fixtures matched generated IDs and
 
 Before native sleep releases model, vision and GPU KV resources, our integration saves idle slot state into the bounded RAM prompt cache. Wake retains that pool only when the model/projector identity and context/cache settings remain compatible.
 
-The saved pool lasts within the **same running process**. Process shutdown or reboot clears it. Changed or evicted histories can still require replay. Sleep retains some RAM and a small CUDA allocation, but releases almost all model VRAM in the tested laptop setup, leaving room for games, video tools or another model.
+The saved pool lasts within the **same running process**. Process shutdown or reboot clears that RAM pool. Protected SSD startup bases survive separately; the rest of a changed or evicted conversation can still require replay. Sleep retains some RAM and a small CUDA allocation, but releases almost all model VRAM in the tested laptop setup, leaving room for games, video tools or another model.
+
+### 💾 7. Protected startup prefixes: remember the agent before its first question
+
+Two independent SSD bases retain the native tokenized instructions and tool definitions for two client flows, such as Hermes Web and Telegram. The boundary is determined from the real rendered request, before any user content. A fixed greeting or synthetic answer is never part of the saved base.
+
+```text
+Web request ───────┐                  ┌─ active state: keep it if best
+                  ├─ exact matching ─┼─ RAM conversation: restore if better
+Telegram request ─┘                  └─ SSD startup base: verified fallback
+                                              │
+                                     evaluate the new suffix
+```
+
+Only exact native tokens and compatible model/runtime identity allow state reuse. If neither base matches, similarity chooses **which base to rebuild**, not which incompatible state to restore. A free slot is used first; the other occupied base remains intact. Integrity checks and per-base status distinguish a missing, invalid or changed base from a normal interface switch.
+
+The native selector accounts for usable hybrid/recurrent checkpoints, preserves an advanced active conversation in the existing bounded RAM pool before replacing it, and avoids downgrading a warmer state to the shorter SSD base. Multimodal histories keep the native media path because a text preview cannot represent image/audio chunks correctly.
+
+The tested limit is **2 GiB per SSD base, 4 GiB combined**, separate from the **3 GiB laptop RAM pool**. Atomic replacement may briefly need additional disk space. After a full serving-stack restart, the 27B backend imported both bases into RAM at startup; the lazy 35B backend verified both on disk and deferred weight loading and import until the next request. A full OS reboot was not part of that test.
+
+### 🧭 8. Agent preparation: keep the useful prefix stable
+
+Deferred tools have a compact capability catalog; the agent loads the detailed schema when needed. Skills continue to use their native loader. Static Superpowers bootstrap instructions now occupy bounded native system sections before the first user message, with the original text and skill files preserved. A compatibility hook retains the previous behavior for older frozen sessions or skipped sections.
+
+Preparation uses the real interface factory, profile directory, memories, tool availability and provider/template options. Two fresh requests with different questions must produce the same protected prefix. This prevents a task-specific fixture, such as a Kanban prompt, from being mistaken for the ordinary chat baseline. Existing conversations retain their frozen prompts; a new session picks up the revised organization. See the [Hermes integration](integrations/hermes/) for the versioned patches and CPU-only checks.
 
 ---
 
@@ -166,7 +197,27 @@ The gain is in **prompt processing before generation**, not a measured increase 
 
 </details>
 
-### 🖥️ B. 122B workstation — expert cache, vision and DMA
+### 💾 B. Protected prefixes — real agent flows and restart
+
+The new [return benchmark report](docs/PREFIX_BENCHMARKS.md) records both controlled requests and real user calls, including the complete serving-stack restart with **zero warm-up inference**. The companion [numeric evidence](benchmarks/persistent-prefix-return-20261020.json) retains the distinction between cold weight loading and loaded-model response latency.
+
+| Loaded model, short controlled request | Web first token | Telegram first token |
+| :--- | ---: | ---: |
+| 35B laptop, switch back using RAM | **1.213 s** | **0.981 s** |
+| 27B workstation, alternating fresh flows | **0.875 s** | **0.509 s** |
+
+All ten controlled calls completed normally without tool execution. The two bases per backend remained available. These first-token figures include reasoning output and are not generation throughput or complete Hermes task durations. Reloading model weights after sleep or shutdown still costs time; the checkpoint removes repeated prefix evaluation, not model loading.
+
+The first **real user requests after the complete restart**, without artificial warm-up:
+
+| Environment | Cached / input tokens | Native first token | API / proxy request time |
+| :--- | ---: | ---: | ---: |
+| 35B laptop, weights loaded inside the request | **16,233 / 16,340 · 99.35%** | Not retained | **76.5 s**, including loading and restoration |
+| 27B workstation, weights and SSD bases loaded at startup | **23,040 / 23,273 · 99.00%** | **0.97 s** | **4.133 s**, proxy service time |
+
+The 27B proxy's first byte arrived at **2.710 s**. On the laptop, a valid prefix was reported **55.771 s** after request start, but that interval combines loading, readiness and restoration; it cannot be labeled pure weight-load time. The operator described continuation as feeling immediate after loading. That perception is kept separate from measured latency. The report includes the slower real calls too, including a 23,120-token new suffix on the 27B; new content still requires work.
+
+### 🖥️ C. 122B workstation — expert cache, vision and DMA
 
 The original September results remain part of the project: a **122B Q2_0 MoE**, **RTX 5060 Ti 16 GB** and **PCIe 3.0 x16**. These figures were not rerun for the October documentation update and are separate from the laptop results.
 
@@ -210,8 +261,11 @@ The original fit example reported ~3.7 GB for dense/attention layers, ~2.5 GB KV
 | :--- | :--- |
 | Original LRU + pinned-vision bundle | Published: [unified patch](moe_lru_cache_and_pinned_vision.patch), [vision patch](pinned_vision_cuda_host.patch), [build guide](docs/LEGACY_122B_SETUP.md) and [test script](test_moe_lru.sh) |
 | Native RAM prompt cache and idle sleep | Upstream llama-server features; compatible configuration is required |
-| Preserve prompt cache through sleep | Locally built and tested on `620d2225`; new patch files not yet published here |
-| APEX-inspired four-checkpoint adaptation | Locally exercised, experimental; numerical limitations retained in the evidence |
+| Preserve prompt cache through sleep | Published in the [tested `620d2225` patch](patches/llama.cpp/); same-process RAM preservation |
+| APEX-inspired four-checkpoint adaptation | Included in that patch; experimental, with numerical limitations retained in the evidence |
+| Two protected pre-user SSD bases | [Native patch](patches/llama.cpp/) + [portable Python controller and tests](integrations/llama_cpp/); private slot API required |
+| Cacheable Hermes preparation | [Versioned integration and CPU tests](integrations/hermes/); original skill text preserved |
+| Tabby/EXL3 equivalent | [Optional integration](integrations/tabby/), versioned separately and licensed under AGPL-3.0 |
 | Latest-upstream refresh | Prepared against `0ce8cd11416c8840498e6701bcbe39ad4b858c2b`; not yet built, GPU-tested or released |
 
 The old bundle uses slot-based expert-cache flags and `MTMD_PINNED_HOST`. The newer local runtime uses a MiB budget and selective `ORNITH_MMPROJ_HOST_WEIGHTS`. Choose the matching source and patch generation; the [legacy guide](docs/LEGACY_122B_SETUP.md) keeps the original commands without presenting them as a universal installer for today's upstream.
@@ -222,10 +276,12 @@ The old bundle uses slot-based expert-cache flags and `MTMD_PINNED_HOST`. The ne
 - **[csantiago78, expert-cache PR #27861](https://github.com/ggml-org/llama.cpp/pull/27861)** — the original host-offloaded expert LRU work; **[eapache, PR #30637](https://github.com/ggml-org/llama.cpp/pull/30637)** for the newer upstream SLRU.
 - **[Host prompt caching, PR #16391](https://github.com/ggml-org/llama.cpp/pull/16391)** — the foundation for bounded conversation-state reuse.
 - **[VectorAnvil / APEX V2](https://github.com/VectorAnvil/apex-r9700/blob/main/v2/reports/cache-coverage.md)** — checkpoint-coverage research that inspired the local intermediate-anchor adaptation.
+- **[Hermes](https://github.com/NousResearch/hermes-agent) / Nous Research** and **[Superpowers](https://github.com/obra/superpowers) / Jesse Vincent and contributors** — agent lifecycle, progressive tool/skill loading and the bootstrap preserved by the optional integration.
+- **[TabbyAPI](https://github.com/theroyallab/tabbyAPI)** and **[ExLlamaV3](https://github.com/turboderp-org/exllamav3)** — the optional EXL3 serving integration and its paged/recurrent cache primitives; their licenses remain separate.
 - **[FreeToken](https://github.com/FlashML-org/FreeToken)** and **ncpumoe / CPU expert-offload experiments** — prior work and inspiration around sparse activation, locality and heterogeneous memory.
 - **[Qwen team](https://huggingface.co/Qwen)** and **[ISTA-DASLab](https://huggingface.co/ISTA-DASLab)** — model architectures and quantization research used in the original workstation experiments.
 - **[NVIDIA CUDA](https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__MEMORY.html)** — pinned-host and host-registration primitives used by these memory paths.
 
 ## 📄 License
 
-Project changes follow the `llama.cpp` MIT license. Upstream work retains its authorship and notices; the linked experiments and projects keep their respective licenses.
+The llama.cpp patch/controller and Hermes/Superpowers changes follow their MIT foundations; upstream notices are retained in [licenses](licenses/) and the integration directories. The optional **Tabby integration is AGPL-3.0**, not MIT; consult its own license and installation notes. Model weights, saved model states, personal prompts, credentials and deployment-specific configuration are not included.

@@ -1,0 +1,138 @@
+--- a/tools/tool_search.py
++++ b/tools/tool_search.py
+@@ -47,6 +47,8 @@
+     listing_max_tokens: int = 4000  # budget = min(this, threshold_pct% of context)
+     # None = curated default; an explicit list replaces it wholesale ([] = defer no core tools).
+     defer_tools: Optional[frozenset] = None
++    # Opt-in capability cards retain a useful overview without shipping schemas.
++    listing_style: str = "compact"  # "compact" | "capabilities"
+ 
+     @property
+     def effective_defer_tools(self) -> frozenset:
+@@ -68,6 +70,8 @@
+             max_search_limit=max_search_limit,
+             listing=_tri_state(raw.get("listing", "auto")),
+             listing_max_tokens=_clamped_int(raw.get("listing_max_tokens"), 4000, 200, 60000),
++            listing_style=("capabilities" if raw.get("listing_style") == "capabilities"
++                           else "compact"),
+             defer_tools=(frozenset(str(n).strip() for n in defer_raw if str(n).strip())
+                          if isinstance(defer_raw, (list, tuple, set)) else None))
+ 
+@@ -246,6 +250,12 @@
+             "here FIRST — do not claim the capability is unavailable and do "
+             "not substitute a generic tool (terminal/browser) without "
+             "searching.\n\n" + listing)
++    if listing_form == "capabilities":
++        return desc + (
++            "\n\nCapability cards below are an index, not execution instructions. "
++            "Choose all relevant groups, then search or describe their exact tools. "
++            "Load the complete schema before using unfamiliar parameters; discovery "
++            "does not change the tools already in this request or bypass approvals.\n\n" + listing)
+     desc += (
+         "\n\nEvery deferred capability is listed below. If a tool name "
+         "appears here, do NOT claim it is unavailable — load it with "
+@@ -360,10 +370,10 @@
+     listing_budget = listing_token_budget(config, context_length)
+     if config.listing != "off":
+         listing, listing_form = build_catalog_listing_with_form(
+-            deferrable, max_tokens=listing_budget)
++            deferrable, max_tokens=listing_budget, style=config.listing_style)
+     bridge = bridge_tool_schemas(len(deferrable), listing=listing, listing_form=listing_form,
+                                  connections_granted=connections_granted)
+-    tier = 1 if listing_form in ("full", "names", "mixed") else 2
++    tier = 1 if listing_form in ("full", "names", "mixed", "capabilities") else 2
+     logger.info(
+         "tool_search activated (tier %d): %d core/visible tools kept, %d deferred "
+         "(~%d tokens), listing %s (budget ~%d tokens)",
+--- a/tools/tool_search_catalog.py
++++ b/tools/tool_search_catalog.py
+@@ -233,14 +233,77 @@
+     return label[4:] if label.startswith("mcp-") else label
+ 
+ 
++# These are source-level orientation hints, not substitutes for tool instructions.
++# Unknown sources still derive their overview from their own scoped metadata.
++_CAPABILITY_GUIDANCE = {
++    "browser": (
++        "Inspect and interact with web pages: navigation, page snapshots, controls, images and browser state.",
++        "Use for rendered pages, visual inspection or an interactive workflow; discover the specific operation first."),
++    "kanban": (
++        "Organize project work: inspect boards/tasks, create or update tasks, link work, comments, reviews and attachments.",
++        "Use when tracking project progress or coordinating task state; read board/task details before changing them."),
++
++}
++
++
++def _capability_card(label: str, definitions: List[Dict[str, Any]]) -> str:
++    """Four-line, schema-free overview derived from the scoped registry metadata.
++
++    No LLM summaries, filesystem reads or changing runtime counters enter the
++    prefix. Parameter names/types are orientation only; describe retains every
++    description, required field and constraint before execution.
++    """
++    functions = sorted((_fn(td) for td in definitions), key=lambda fn: fn.get("name", ""))
++    names = [fn["name"] for fn in functions]
++    examples = list(dict.fromkeys(
++        _short_desc(fn.get("description", ""), 135) for fn in functions
++        if fn.get("description")))[:3]
++    parameters = {}
++    required = set()
++    for fn in functions:
++        required.update((fn.get("parameters") or {}).get("required") or [])
++        for name, value in sorted(((fn.get("parameters") or {}).get("properties") or {}).items()):
++            kind = value.get("type", "value") if isinstance(value, dict) else "value"
++            parameters.setdefault(name, str(kind))
++    input_names = sorted(parameters, key=lambda name: (name not in required, name))[:8]
++    inputs = ", ".join(f"{name} ({parameters[name]})" for name in input_names)
++    if len(parameters) > 8:
++        inputs += ", …"
++    purpose, selection = _CAPABILITY_GUIDANCE.get(label, (
++        "; ".join(examples),
++        "Use this source for the operations described above; search its name plus your intended action, and combine sources when needed."))
++    return "\n".join([
++        f"{label} — {len(names)} available tools: " + purpose,
++        selection,
++        "Typical inputs: " + (inputs or "see the selected tool") +
++        ". Get full instructions/constraints and response details via tool_describe; never infer arguments.",
++        "Exact names: " + ", ".join(names),
++    ])
++
++
+ def build_catalog_listing_with_form(
+-    deferrable: List[Dict[str, Any]], *, max_tokens: int = 4000) -> Tuple[Optional[str], str]:
++    deferrable: List[Dict[str, Any]], *, max_tokens: int = 4000,
++    style: str = "compact") -> Tuple[Optional[str], str]:
+     """Render the deferred-catalog manifest: ``- name: short desc`` lines grouped per source.
+     Returns ``(text, form)``; form is ``"full"``, ``"names"``, ``"mixed"`` (oversized servers
+     collapsed to a name + count line), ``"groups"`` (every server summarized) or ``"none"``
+     (over budget even summarized -> text is None). Ordering is deterministic (sorted groups
+     and tools) so the block is byte-stable — the request prefix stays cacheable. Degradation
+     is PER SERVER, largest first: one huge server must not cost a small one its listing."""
++    if style == "capabilities":
++        capability_groups: Dict[str, List[Dict[str, Any]]] = {}
++        for td in deferrable:
++            name = _fn(td).get("name", "")
++            if name:
++                label = _listing_group_label(_classify_source(name)[1])
++                capability_groups.setdefault(label, []).append(td)
++        if capability_groups:
++            cards = "\n\n".join(_capability_card(label, capability_groups[label])
++                                    for label in sorted(capability_groups))
++            if math.ceil(len(cards) / CHARS_PER_TOKEN) <= max_tokens:
++                return cards, "capabilities"
++        # Preserve the existing bounded fallbacks instead of silently dropping a
++        # capability when a very large installation cannot fit richer cards.
+     groups: Dict[str, List[Tuple[str, str]]] = {}
+     for td in deferrable:
+         fn = _fn(td)
+--- a/hermes_cli/config_defaults.py
++++ b/hermes_cli/config_defaults.py
+@@ -1858,6 +1858,8 @@
+             # then bare tier-2 bridge); "on" = same rendering, explicit intent; "off" = always the
+             # bare bridge.
+             "listing": "auto",
++            # Capability cards summarize metadata; full schemas stay on demand.
++            "listing_style": "compact",
+             # Absolute cap on the embedded listing in tokens (chars/4), regardless of context size.
+             # Range 200..60000.
+             "listing_max_tokens": 4000,

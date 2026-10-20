@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "cpu_tests_passed": 29,
+  "cpu_test_command": "python3 -I -m unittest discover -s integrations/tabby/tests -v",
+  "public_clone_base_check_passed": true,
+  "patch_applies_cleanly": true,
+  "patched_hooks_reproduce_tested_source": true,
+  "native_reference_files_identical": 12,
+  "redaction_patterns_checked": [
+    "private_host_path",
+    "private_network",
+    "credential_literal"
+  ],
+  "redaction_findings": [],
+  "models_loaded": 0,
+  "inference_calls": 0,
+  "production_changes": 0,
+  "patch_sha256": "d864eeed8fca9a1ef6c9ce7f5256581272c1cefe2924149499a73f006a817e5b",
+  "export_step_performed_git_mutation": false
+}

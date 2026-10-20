@@ -1,0 +1,50 @@
+{
+  "base_commit": "620d2225cc436ab0b001e3200e590e3b286ef9ab",
+  "upstream": "https://github.com/ggml-org/llama.cpp",
+  "patch": "620d2225-sleep-grid-dual-prefix.patch",
+  "patch_sha256": "838fffd9451817d225b81863a446e058ed481f0232301233c5301bcef6635b89",
+  "files": {
+    "ggml/src/ggml-cuda/ggml-cuda.cu": {
+      "before_sha256": "572e5facba2c6b2ce2f7c6a4c43566d5a719d6e984f7265f1895410cc82d31ec",
+      "after_sha256": "190c4b16d70ab518977ee76cd75d188b9e30e5978d2248061ee49604521a9b42"
+    },
+    "src/llama-moe-cache.cpp": {
+      "before_sha256": "9304802f6a3e5824504476fe94440a9e39727889bec40dc89a5bacf437e0429b",
+      "after_sha256": "dbfa07dbe41d15aa97b7f218cf5b415c0fe2aef5a6da39e2f150b30da1014288"
+    },
+    "tests/test-server-component.cpp": {
+      "before_sha256": "643a8088f4df36109e39a26c2ec263aecbfef8cce2d55c8085e19221e3607bc2",
+      "after_sha256": "e16d66f4e7509819798ba2c511240fe2f3c02d3841f65f7f407e0d33141ab8dd"
+    },
+    "tools/mtmd/clip.cpp": {
+      "before_sha256": "ec92b77c537943b67e21620a977f681b1bbde8d5485ab9a6383d4f8cfc05873a",
+      "after_sha256": "79cd646e1b0558eacce953ba93f911f1f30c997df8a8fb53c6190aee6e323a89"
+    },
+    "tools/server/server-common.h": {
+      "before_sha256": "1aebeeb72c7f232fe6588370a3bb5f27b92e265bbb151eb26207fdc87414753d",
+      "after_sha256": "3a64c75753a35a6bb9c2cafe809ffd782c03370da5dde501fd9ac08428570e30"
+    },
+    "tools/server/server-context.cpp": {
+      "before_sha256": "4ed2e401a9e566b2caf2dd208582fbd42a6b230d516b1b9d56be130cbad3caa6",
+      "after_sha256": "b222efa193a38ed1ddc0743de5cbc2076a86392891b944d333bdf67650774996"
+    },
+    "tools/server/server-task.cpp": {
+      "before_sha256": "4c3f413b9b54d4cc0e7b5998e6979a2389f5ff716e20cb1510ca7745fa233495",
+      "after_sha256": "45700f55cd8f5e7519b9efa66a54303089879e2ae95380a635296490f583626f"
+    },
+    "tools/server/server-task.h": {
+      "before_sha256": "ffd0ac6e1d0f0af63c35d1fd07347e3ec6b3746769667e55742521c7d0c5904f",
+      "after_sha256": "29454f7396b25cd5167b853beb82c10f16605572d9fc637b947a2371d4d0fc45"
+    },
+    "tests/test-server-prefix-selection.cpp": {
+      "before_sha256": null,
+      "after_sha256": "bfd7b33a14527675747cc76ef435ecc31c4220ebf7a38f9a660ec543f8495572"
+    },
+    "tools/server/server-prefix-selection.h": {
+      "before_sha256": null,
+      "after_sha256": "6164e858f3645f6d3dbea98f505d5f43b5c39d959044544da11165973f5b4e96"
+    }
+  },
+  "source_status": "Exported byte-for-byte from the locally built and GPU-tested deployed native source; validation must still match the pinned base.",
+  "excluded": "Bytecode, model weights, prompts, token checkpoints, deployment configuration and binaries are not included."
+}

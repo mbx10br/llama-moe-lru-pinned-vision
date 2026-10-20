@@ -1,0 +1,44 @@
+{
+  "date": "2026-10-20",
+  "scope": "Public source packaging; CPU-only checks. Existing GPU and real-user measurements are recorded separately.",
+  "native_patch": {
+    "base_commit": "620d2225cc436ab0b001e3200e590e3b286ef9ab",
+    "sha256": "838fffd9451817d225b81863a446e058ed481f0232301233c5301bcef6635b89",
+    "clean_apply": true,
+    "all_file_digests_match": true,
+    "file_count": 10,
+    "standalone_cpp_selector": "passed",
+    "prior_component_tests": {
+      "cases": 41,
+      "assertions": 172,
+      "rerun_during_export": false
+    }
+  },
+  "portable_controller_unittest": {
+    "passed": 12,
+    "skipped": 0,
+    "command": "python3 -B -m unittest discover -s integrations/llama_cpp -p 'test_*.py' -v"
+  },
+  "hermes_unittest": {
+    "passed": 11,
+    "skipped": 0,
+    "includes_two_real_factory_mock_captures": true,
+    "requires_installed_hermes_dependencies": true
+  },
+  "tabby_unittest": {
+    "passed": 29,
+    "skipped": 0,
+    "requires_model_or_cuda": false
+  },
+  "hermes_optional_catalog_runtime_tests": {
+    "passed": 2,
+    "public_patch_on_clean_baseline": true
+  },
+  "visual_validation": {
+    "svg_xml_valid": true,
+    "diagram_rendered": true,
+    "text_within_canvas": true
+  },
+  "live_runtime_changes_during_packaging": 0,
+  "inference_calls_during_packaging": 0
+}

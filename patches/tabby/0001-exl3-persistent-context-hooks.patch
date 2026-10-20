@@ -1,0 +1,210 @@
+# TabbyAPI CPU/persistent context and two protected pre-user bases.
+# Modified/exported 2026-10-20; AGPL-3.0-only, see integrations/tabby/LICENSE.
+# Base: be74bf0a00bcb3a518e6feb7606f150c189be637
+# Companion modules: integrations/tabby/overlay/common/*.py
+diff --git a/common/config_models.py b/common/config_models.py
+--- a/common/config_models.py
++++ b/common/config_models.py
+@@ -754,6 +754,20 @@
+         0,
+         description=("Size of system memory second-tier K/V cache, in MB (default: 0)"),
+     )
++    disk_cache_dir: Optional[str] = Field(
++        None, description="Private directory on the dedicated bounded tmpfs; disabled by default.",
++    )
++    disk_cache_size: int = Field(
++        7936, ge=256, le=7936,
++        description="Persistent RAM-filesystem cache budget in MiB; leaves metadata room below 8 GiB.",
++    )
++    disk_cache_checkpoint_interval: int = Field(
++        4096, ge=256,
++        description="Minimum spacing of retained persistent checkpoints; does not create new checkpoints.",
++    )
++    cache_control_socket: Optional[str] = Field(
++        None, description="Private Unix control socket; no TCP administration endpoint is added.",
++    )
+     sysmem_multimodal_cache: Optional[int] = Field(
+         1024,
+         description=(
+diff --git a/common/model.py b/common/model.py
+--- a/common/model.py
++++ b/common/model.py
+@@ -336,6 +336,9 @@
+ 
+         raise HTTPException(503, error_message)
+ 
++    if getattr(container, "cache_quiescing", False):
++        raise HTTPException(503, "Backend is handing the GPU to media")
++
+ 
+ async def check_embeddings_container():
+     """
+diff --git a/main.py b/main.py
+--- a/main.py
++++ b/main.py
+@@ -15,6 +15,7 @@
+ from common.args import convert_args_to_dict, init_argparser
+ from common.auth import load_auth_keys
+ from common.actions import run_subcommand
++from common.cache_persistence import CacheControl
+ from common.logger import set_console_timestamps, setup_logger, xlogger
+ from common.networking import is_port_in_use
+ from common.optional_dependencies import dependencies
+@@ -120,10 +121,17 @@
+     if config.logging.log_live_status:
+         status_display.start()
+ 
++    cache_control = None
++    if config.memory.disk_cache_dir:
++        cache_control = CacheControl(lambda: model.container)
++        await cache_control.start(config.memory.cache_control_socket)
++
+     try:
+         await start_api(host, port)
+     finally:
+         await status_display.stop()
++        if cache_control is not None:
++            await cache_control.close()
+ 
+     # Uvicorn has finished serving; unload any loaded models so pending
+     # jobs are cancelled and the generator is closed cleanly
+diff --git a/backends/exllamav3/model.py b/backends/exllamav3/model.py
+--- a/backends/exllamav3/model.py
++++ b/backends/exllamav3/model.py
+@@ -6,6 +6,7 @@
+ from asyncio import CancelledError
+ 
+ import torch
++from fastapi import HTTPException
+ from itertools import zip_longest
+ from typing import (
+     Any,
+@@ -30,6 +31,9 @@
+ from backends.exllamav3.utils import exllama_supports_nccl
+ from backends.exllamav3.vision import clear_image_embedding_cache, image_embedding_cache
+ from common.concurrency import iterate_in_threadpool
++from common.cache_persistence import persistence_kwargs
++from common.permanent_prefix import PrefixStore, runtime_identity
++import os
+ from common.gen_logging import (
+     format_settings,
+     log_generation_params,
+@@ -114,6 +118,7 @@
+     # The condition notifies any waiting tasks
+     active_job_ids: Dict[str, Any]
+     loaded: bool = False
++    cache_quiescing: bool = False
+     load_lock: asyncio.Lock
+     load_condition: asyncio.Condition
+ 
+@@ -1021,11 +1026,25 @@
+                 max_chunk_size=self.chunk_size,
+                 recurrent_cache_size=config.memory.sysmem_recurrent_cache * 1024**2,
+                 cpu_cache_size=config.memory.sysmem_kv_cache * 1024**2,
++                **persistence_kwargs(config.memory),
+                 num_draft_tokens=self.draft_num_tokens,
+                 dynamic_draft_tokens=self.dynamic_draft,
+                 ngram_match_min=self.ngram_match_min,
+                 **checkpoint_kwargs,
+             )
++
++            # The protected pre-user seed lives on SSD, outside the evictable
++            # tmpfs root. Reconcile only here, before yielding to the async
++            # generation loop or exposing the newly loaded model to requests.
++            prefix_root = os.environ.get("HERMES_PERMANENT_PREFIX_DIR")
++            self.permanent_prefix_store = None
++            if prefix_root:
++                try:
++                    self.permanent_prefix_store = PrefixStore(prefix_root, notify=xlogger.info)
++                    self.permanent_prefix_store.restore(
++                        self.generator.generator.disk_page_cache, runtime_identity(self))
++                except Exception as error:
++                    xlogger.warning("Protected prefix initialization failed: " + type(error).__name__)
+ 
+             # Update the state of the container var
+             if self.max_batch_size is None:
+@@ -1073,6 +1092,13 @@
+                 # Wait for other jobs to finish
+                 await self.wait_for_jobs(kwargs.get("skip_wait"))
+ 
++            # Drain persistence and retire generator while its GPU tensors are
++            # still valid. The scheduler has already confirmed its flush before
++            # stopping this service; other graceful unloads get the same order.
++            if self.generator is not None:
++                await self.generator.close()
++                self.generator = None
++
+             # Clear the image embedding cache
+             clear_image_embedding_cache()
+ 
+@@ -1091,11 +1117,6 @@
+             if self.use_vision:
+                 self.vision_model.unload()
+                 self.vision_model = None
+-
+-            # Cleanup the generator from any pending jobs
+-            if self.generator is not None:
+-                await self.generator.close()
+-                self.generator = None
+ 
+             gc.collect()
+             torch.cuda.empty_cache()
+@@ -1702,6 +1723,10 @@
+             },
+         )
+ 
++        # No await between this final gate and AsyncJob.enqueue: a request
++        # which passed an earlier HTTP dependency cannot race the flush ACK.
++        if self.cache_quiescing:
++            raise HTTPException(503, "Backend is handing the GPU to media; request through the admission proxy")
+         generation = {}
+         job = AsyncJob(
+             self.generator,
+diff --git a/endpoints/OAI/utils/chat_completion.py b/endpoints/OAI/utils/chat_completion.py
+--- a/endpoints/OAI/utils/chat_completion.py
++++ b/endpoints/OAI/utils/chat_completion.py
+@@ -549,6 +549,44 @@
+         if bos_token and model.container.hf_model.add_bos_token() and prompt.startswith(bos_token):
+             prompt = prompt.removeprefix(bos_token)
+ 
++        # Optional protected pre-user seed. Render only consecutive leading
++        # system/developer messages with the same native template/tools, then
++        # retain a strict token prefix of the full real prompt. Nothing after
++        # the first user message can enter the seed.
++        if getattr(model.container, "permanent_prefix_store", None) is not None:
++            from common.permanent_prefix import auto_prepare, digest, stable_leading_messages
++            leading = []
++            for message in data.messages:
++                if message.role != "system":
++                    break
++                leading.append(message.model_dump(exclude_none=True))
++            leading = stable_leading_messages(leading)
++            # Auxiliary title/summarization jobs do not replace a Hermes base.
++            # Tool-aware agent requests are the opted-in workload for this host.
++            if leading and tools:
++                leading_vars = dict(template_vars)
++                # Qwen's native template rejects a system-only conversation.
++                # A synthetic boundary satisfies that validation, then is cut
++                # out BEFORE tokenization/prefill. No sentinel is processed.
++                boundary = "HERMES_PRE_USER_BOUNDARY_6303f7a1883b495a9c8395adbcc8327e"
++                leading_vars.update(messages=leading + [{"role": "user", "content": boundary}],
++                                    add_generation_prompt=False)
++                try:
++                    prefix_prompt = await model.container.prompt_template.render(leading_vars)
++                    if prefix_prompt.count(boundary) != 1:
++                        raise ValueError("Template changed the pre-user boundary")
++                    prefix_prompt = prefix_prompt[:prefix_prompt.index(boundary)]
++                    if (bos_token and model.container.hf_model.add_bos_token()
++                            and prefix_prompt.startswith(bos_token)):
++                        prefix_prompt = prefix_prompt.removeprefix(bos_token)
++                    add_bos = unwrap(data.add_bos_token, model.container.hf_model.add_bos_token())
++                    auto_prepare(model.container, prompt, prefix_prompt,
++                                 digest({"leading": leading, "tools": tools,
++                                         "functions": data.functions}), add_bos)
++                except Exception as error:
++                    model.container.permanent_prefix_store.report(
++                        "error", "capture-" + type(error).__name__)
++
+         return prompt, mm_embeddings
+ 
+     except KeyError as exc:

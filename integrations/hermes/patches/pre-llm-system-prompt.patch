@@ -1,0 +1,28 @@
+diff --git a/agent/turn_context.py b/agent/turn_context.py
+index b4b7566..38962cb 100644
+--- a/agent/turn_context.py
++++ b/agent/turn_context.py
+@@ -663,6 +663,7 @@ def _ensure_session_row(agent: Any, pending_cli_message: Any) -> None:
+ def _collect_pre_llm_call_context(
+     agent: Any, *, effective_task_id: str, turn_id: str, original_user_message: Any,
+     messages: List[Any], conversation_history: Optional[List[Any]],
++    system_prompt: Optional[str] = None,
+ ) -> str:
+     """Run ``pre_llm_call`` plugins; their context is injected into the user message
+     (never the system prompt). Oversized per-hook context is spilled to disk so a
+@@ -683,6 +684,7 @@ def _collect_pre_llm_call_context(
+             platform=getattr(agent, "platform", None) or "",
+             parent_session_id=getattr(agent, "_parent_session_id", None) or "",
+             sender_id=getattr(agent, "_user_id", None) or "",
++            system_prompt=system_prompt or "",
+         )
+         try:
+             # Spill oversized per-hook context to disk so a runaway plugin can't inflate every subsequent
+@@ -992,6 +994,7 @@ def build_turn_context(
+         agent, effective_task_id=effective_task_id, turn_id=turn_id,
+         original_user_message=original_user_message, messages=messages,
+         conversation_history=conversation_history,
++        system_prompt=active_system_prompt,
+     )
+     plugin_user_context = _merge_gateway_notes(
+         agent, messages, current_turn_user_idx, plugin_user_context

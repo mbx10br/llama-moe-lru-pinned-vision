@@ -228,7 +228,7 @@ $$\text{Final Output} = \text{Output}_{\text{GPU}} + \text{Output}_{\text{CPU}}$
    ```
    Since exactly one side computes the real value and the other produces 0:
    $$\text{Real Value} + 0 = \text{Real Value}$$
-   The result is **exact to the bit with zero precision loss!**
+   The split preserves the mathematical sum and does not introduce another weight quantization. Floating-point kernels, reduction order and backend choices can still produce numerical differences; this is not a universal bitwise-equality guarantee.
 
 ---
 
@@ -257,7 +257,7 @@ if (base && sz > 0) {
 Combined with `ulimit -l unlimited` (to permit locking ~32 GB of physical RAM pages), this:
 * Locks the virtual pages into physical RAM.
 * Maps the physical addresses directly into the GPU's DMA engine.
-* Enables `cudaMemcpyAsync` to transfer expert slices at the full physical bandwidth of PCIe 3.0 (15.7 GB/s) with **zero CPU mediation**.
+* Lets `cudaMemcpyAsync` transfer expert slices without the extra pageable-host staging copy. Actual throughput depends on PCIe and the workload; the CPU/driver still schedules and synchronizes transfers.
 
 ### Empirical Optimization Findings (The 4 Samples)
 

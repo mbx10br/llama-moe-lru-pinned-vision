@@ -1,0 +1,29 @@
+{
+  "tested": "2026-10-20",
+  "hermes_source_revision": "81805a97ef977b4e1918c0d9945cf720df9952d9",
+  "cpu_only": true,
+  "model_inference_calls": 0,
+  "live_profile_or_conversation_content_in_test_fixtures": false,
+  "portable_unittest": {
+    "passed": 11,
+    "skipped": 0,
+    "includes_two_fresh_real_factory_captures": true,
+    "command": "HERMES_SOURCE=\"$HERMES_SOURCE\" python3 -m unittest discover -s integrations/hermes/tests -p \"test_*.py\" -v"
+  },
+  "public_patch_validation": {
+    "core_hook_clean_apply": true,
+    "progressive_catalog_clean_apply": true,
+    "baseline_snapshots_only": true
+  },
+  "public_catalog_runtime_tests": {
+    "passed": 2,
+    "patched_public_modules_used": true,
+    "active_source_modified": false,
+    "command": "PYTHONPATH=\"$HERMES_SOURCE\" python3 -m pytest integrations/hermes/tests/test_catalog_runtime.py -q"
+  },
+  "limits": [
+    "The HTTPX/OpenAI and real-factory tests need the installed Hermes dependencies.",
+    "No native GPU checkpoint benchmark is implied by these CPU integration tests.",
+    "The example capture executable targets normal Web/TUI; messaging gateways require their own actual factory settings."
+  ]
+}

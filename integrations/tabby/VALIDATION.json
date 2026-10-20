@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "qualification_date": "2026-10-20",
+  "export_cpu_tests": {
+    "command": "python3 -I -m unittest discover -s integrations/tabby/tests -v",
+    "passed": 29,
+    "requires_model": false,
+    "requires_cuda": false
+  },
+  "native_evidence": {
+    "status": "prior_observations_not_rerun_during_export",
+    "model": "Qwen3.8 27B EXL3 SC-3.00-H4",
+    "draft": "DFlash2 Q4",
+    "target_kv": "K5/V4",
+    "parallel_slots": 2,
+    "configured_context_tokens": 130000,
+    "native_ram_settings_mib": {
+      "recurrent": 4096,
+      "cpu_kv": 6144,
+      "tmpfs_max": 8192,
+      "tmpfs_data_budget": 7936
+    },
+    "legacy_migration_generation_inode_manifest_unchanged": true,
+    "alternating_exact_use_did_not_republish": true,
+    "changing_A_preserved_B_byte_for_byte": true,
+    "cpu_corruption_and_individual_reimport_tests_passed": true,
+    "prefix_artifacts_contain_static_bootstrap_without_user_boundary": true,
+    "measurements": [
+      {
+        "case": "prefix-A-initial",
+        "cached_tokens": 22784,
+        "input_tokens": 23081,
+        "observed_first_token_seconds": 23.893612544983625,
+        "wall_seconds": 23.954571412992664,
+        "native_prompt_seconds": 0.72,
+        "native_total_seconds": 0.97,
+        "completion_tokens": 17,
+        "finish_reason": "stop",
+        "returned_tools": false
+      },
+      {
+        "case": "prefix-B-initial",
+        "cached_tokens": 16128,
+        "input_tokens": 16378,
+        "observed_first_token_seconds": 16.736814097006572,
+        "wall_seconds": 17.17660012000124,
+        "native_prompt_seconds": 0.54,
+        "native_total_seconds": 1.17,
+        "completion_tokens": 37,
+        "finish_reason": "stop",
+        "returned_tools": false
+      },
+      {
+        "case": "prefix-A-new-user-after-B",
+        "cached_tokens": 23040,
+        "input_tokens": 23081,
+        "observed_first_token_seconds": 0.5085130880179349,
+        "wall_seconds": 0.6787431930133607,
+        "native_prompt_seconds": 0.14,
+        "native_total_seconds": 0.5,
+        "completion_tokens": 15,
+        "finish_reason": "stop",
+        "returned_tools": false
+      },
+      {
+        "case": "prefix-B-new-user-after-A",
+        "cached_tokens": 16128,
+        "input_tokens": 16378,
+        "observed_first_token_seconds": 0.8745808129897341,
+        "wall_seconds": 1.04636660599499,
+        "native_prompt_seconds": 0.54,
+        "native_total_seconds": 0.9,
+        "completion_tokens": 28,
+        "finish_reason": "stop",
+        "returned_tools": false
+      }
+    ],
+    "initial_prepare_publish_seconds": {
+      "prefix-A": 22.795,
+      "prefix-B": 15.839
+    },
+    "protected_bases": [
+      {
+        "id": "base-1",
+        "tokens": 22784,
+        "bytes": 588191126
+      },
+      {
+        "id": "base-2",
+        "tokens": 16128,
+        "bytes": 451817207
+      }
+    ],
+    "committed_protected_bytes": 1040008333,
+    "native_budget_changed": false,
+    "model_restarted_for_sse_measurements": false
+  },
+  "limits": [
+    "Short inert requests; generation rate is not a broad throughput benchmark.",
+    "Configured 130K capacity is not a filled-130K recovery or quality qualification.",
+    "No private request payload, system prompt, model checkpoint or deployment configuration is included.",
+    "Native source compatibility is qualified only against the referenced Tabby commit and checked EXL3 v1.6.3 files."
+  ]
+}

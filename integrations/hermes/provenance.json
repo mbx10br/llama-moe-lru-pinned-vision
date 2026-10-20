@@ -1,0 +1,20 @@
+{
+  "superpowers": {
+    "repository": "https://github.com/obra/superpowers",
+    "commit": "8ca22dba9a94f28898bbce59f2537ff4d87c747d",
+    "version": "6.4.2",
+    "upstream_adapter_sha256": "7fd93899e39371d56ba1e32660548673afa78f3a4a8bd306f93fbb418afa6f3c",
+    "unchanged_upstream_functions": {
+      "_skills_dir": true,
+      "_strip_frontmatter": true,
+      "_build_bootstrap": true
+    }
+  },
+  "hermes": {
+    "repository": "https://github.com/NousResearch/hermes-agent",
+    "tested_source_revision": "81805a97ef977b4e1918c0d9945cf720df9952d9",
+    "core_changes": "Three additive lines; actual rendered system prompt passed to pre_llm_call",
+    "upstream_merge_claim": false
+  },
+  "private_skill_or_profile_content_included": false
+}
